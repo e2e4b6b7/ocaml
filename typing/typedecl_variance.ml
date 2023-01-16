@@ -95,25 +95,7 @@ let compute_variance env visited vari ty =
         compute_same ty2
     | Tsubst _ ->
         assert false
-    | Tvariant row ->
-        List.iter
-          (fun (_,f) ->
-            match row_field_repr f with
-              Rpresent (Some ty) ->
-                compute_same ty
-            | Reither (_, tyl, _) ->
-                let open Variance in
-                let upper =
-                  List.fold_left (fun s f -> set f true s)
-                    null [May_pos; May_neg; May_weak]
-                in
-                let v = inter vari upper in
-                (* cf PR#7269:
-                   if List.length tyl > 1 then upper else inter vari upper *)
-                List.iter (compute_variance_rec v) tyl
-            | _ -> ())
-          (row_fields row);
-        compute_same (row_more row)
+    | Tvarian2 _ -> ()
     | Tpoly (ty, _) ->
         compute_same ty
     | Tvar _ | Tnil | Tlink _ | Tunivar _ -> ()

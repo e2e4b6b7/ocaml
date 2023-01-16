@@ -37,10 +37,17 @@ and type_desc =
   | Tnil
   | Tlink of type_expr
   | Tsubst of type_expr * type_expr option
-  | Tvariant of row_desc
+  | Tvarian2 of row2
   | Tunivar of string option
   | Tpoly of type_expr * type_expr list
   | Tpackage of Path.t * (Longident.t * type_expr) list
+
+and row2 =
+  | Tag of label * row_field
+  | Union of row2 * row2
+  | Negation of row2
+  | Zero
+  | Var of type_expr
 
 and row_desc =
     { row_fields: (label * row_field) list;
@@ -567,31 +574,20 @@ let create_row ~fields ~more ~closed ~fixed ~name =
       row_closed=closed; row_fixed=fixed; row_name=name }
 
 (* [row_fields] subsumes the original [row_repr] *)
-let rec row_fields row =
-  match get_desc row.row_more with
-  | Tvariant row' ->
-      row.row_fields @ row_fields row'
-  | _ ->
-      row.row_fields
+let row_fields row = row.row_fields
 
-let rec row_repr_no_fields row =
-  match get_desc row.row_more with
-  | Tvariant row' -> row_repr_no_fields row'
-  | _ -> row
+let row_repr_no_fields row = row
 
 let row_more row = (row_repr_no_fields row).row_more
 let row_closed row = (row_repr_no_fields row).row_closed
 let row_fixed row = (row_repr_no_fields row).row_fixed
 let row_name row = (row_repr_no_fields row).row_name
 
-let rec get_row_field tag row =
+let get_row_field tag row =
   let rec find = function
     | (tag',f) :: fields ->
         if tag = tag' then f else find fields
-    | [] ->
-        match get_desc row.row_more with
-        | Tvariant row' -> get_row_field tag row'
-        | _ -> RFabsent
+    | [] -> RFabsent
   in find row.row_fields
 
 let set_row_name row row_name =
@@ -614,6 +610,72 @@ let row_repr row =
         closed = row.row_closed;
         fixed = row.row_fixed;
         name = row.row_name }
+
+let rec row2_fields row2 =
+  match row2 with
+  | Union (r1, r2) -> List.append (row2_fields r1) (row2_fields r2)
+  | Negation r -> row2_fields r
+  | Tag (l,fi) -> [l, fi]
+  | Var _ -> []
+  | Zero -> []
+
+let get_row2_field tag row =
+  Option.value (List.assoc_opt tag (row2_fields row)) ~default:RFabsent
+
+(* 
+
+type row2_compiled =
+    (* first bool means if there is the negation of listeg tags *)
+    (* list of tags is always sorted by label *)
+  | RCTagSet of bool * (label * row_field) list
+    (* both arguments of union cann't be TagSets *)
+  | RCUnion of row2_compiled * row2_compiled
+    (* argument of negation cann't be TagSet *)
+  | RCNegation of row2_compiled
+  | RCZero
+  | RCVar of type_expr
+
+exception Romanv
+
+let sort_row_fields = List.sort (fun (p,_) (q,_) -> compare p q)
+
+let rec merge_rf r1 r2 pairs fi1 fi2 =
+  match fi1, fi2 with
+    (l1,f1 as p1)::fi1', (l2,f2 as p2)::fi2' ->
+      if l1 = l2 then
+        if f1 != f2 then raise Romanv else
+        merge_rf r1 r2 ((l1,f1)::pairs) fi1' fi2' 
+      else if l1 < l2 then 
+        merge_rf (p1::r1) r2 pairs fi1' fi2 
+      else
+        merge_rf r1 (p2::r2) pairs fi1 fi2'
+  | [], _ -> (List.rev r1, List.rev_append r2 fi2, pairs)
+  | _, [] -> (List.rev_append r1 fi1, List.rev r2, pairs)
+
+let rec compile_row2 row2 = 
+  match row2 with
+  | Negation r -> 
+      let rc = compile_row2 r in
+      (match rc with
+      | RCNegation rc -> rc
+      | RCTagSet (neg, l) -> RCTagSet (not neg, l)
+      | rc -> RCNegation rc)
+  | Union (r1, r2) -> 
+      let rc1 = compile_row2 r1 and rc2 = compile_row2 r2 in
+      (match rc1, rc2 with
+      | RCTagSet (neg1, l1), RCTagSet (neg2, l2) ->
+        let lu1, lu2, lc = merge_rf [] [] [] l1 l2 in
+        let l = sort_row_fields
+          (match neg1, neg2 with 
+          | false, false -> List.append l1 lu2
+          | true, true -> lc
+          | false, true -> lu2
+          | true, false -> lu1) in
+        RCTagSet (neg1 && neg2, l)
+      | _ -> RCUnion (rc1, rc2))
+  | Tag (l, rf) -> RCTagSet (false, [(l, rf)])
+  | Zero -> RCZero
+  | Var v -> RCVar v *)
 
 type row_field_view =
     Rpresent of type_expr option

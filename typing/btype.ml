@@ -173,8 +173,6 @@ let hash_variant s =
 
 let proxy ty =
   match get_desc ty with
-  | Tvariant row when not (static_row row) ->
-      row_more row
   | Tobject (ty, _) ->
       let rec proxy_obj ty =
         match get_desc ty with
@@ -195,8 +193,6 @@ let row_of_type t =
           Tfield(_,_,_,t) -> get_row t
         | _ -> t
       in get_row t
-  | Tvariant row ->
-      row_more row
   | _ ->
       t
 
@@ -218,17 +214,7 @@ let is_constr_row ~allow_ident t =
 
 (* TODO: where should this really be *)
 (* Set row_name in Env, cf. GPR#1204/1329 *)
-let set_static_row_name decl path =
-  match decl.type_manifest with
-    None -> ()
-  | Some ty ->
-      match get_desc ty with
-        Tvariant row when static_row row ->
-          let row =
-            set_row_name row (Some (path, decl.type_params)) in
-          set_type_desc ty (Tvariant row)
-      | _ -> ()
-
+let set_static_row_name _ _ = ()
 
                   (**********************************)
                   (*  Utilities for type traversal  *)
@@ -258,6 +244,21 @@ let fold_row f init row =
 let iter_row f row =
   fold_row (fun () v -> f v) () row
 
+let rec fold_row2 f init row2 =
+  match row2 with
+  | Union (r1, r2) -> fold_row2 f (fold_row2 f init r1) r2
+  | Negation r -> fold_row2 f init r
+  | Tag (_,fi) -> 
+    (match row_field_repr fi with
+      | Rpresent(Some ty) -> f init ty
+      | Reither(_, tl, _) -> List.fold_left f init tl
+      | _ -> init)
+  | Var ty -> f init ty
+  | _ -> init
+
+let iter_row2 f row2 =
+  fold_row2 (fun () v -> f v) () row2
+
 let fold_type_expr f init ty =
   match get_desc ty with
     Tvar _              -> init
@@ -270,9 +271,8 @@ let fold_type_expr f init ty =
       let result = f init ty in
       List.fold_left f result p
   | Tobject (ty, _)     -> f init ty
-  | Tvariant row        ->
-      let result = fold_row f init row in
-      f result (row_more row)
+  | Tvarian2 row2 -> 
+      fold_row2 f init row2
   | Tfield (_, _, ty1, ty2) ->
       let result = f init ty1 in
       f result ty2
@@ -403,8 +403,6 @@ let type_iterators =
     | Tobject (_, {contents=Some (p, _)})
     | Tpackage (p, _) ->
         it.it_path p
-    | Tvariant row ->
-        Option.iter (fun (p,_) -> it.it_path p) (row_name row)
     | _ -> ()
   and it_path _p = ()
   in
@@ -445,7 +443,7 @@ let rec copy_type_desc ?(keep_names=false) f = function
   | Tobject(ty, {contents = Some (p, tl)})
                         -> Tobject (f ty, ref (Some(p, List.map f tl)))
   | Tobject (ty, _)     -> Tobject (f ty, ref None)
-  | Tvariant _          -> assert false (* too ambiguous *)
+  | Tvarian2 _ as ty    -> ty
   | Tfield (p, k, ty1, ty2) ->
       Tfield (p, field_kind_internal_repr k, f ty1, f ty2)
       (* the kind is kept shared, with indirections removed for performance *)

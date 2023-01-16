@@ -85,7 +85,7 @@ let parameter_list_from_arrows typ =
     | Types.Tnil
     | Types.Tunivar _
     | Types.Tpackage _
-    | Types.Tvariant _ ->
+    | Types.Tvarian2 _ ->
         []
     | Types.Tsubst _ ->
         assert false

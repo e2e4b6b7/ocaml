@@ -1,0 +1,5 @@
+#!/bin/bash
+
+# make ocamlc -j 6 || exit
+cd testsuite
+make one TEST=tests/typing-misc/polyvars.ml

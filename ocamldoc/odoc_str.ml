@@ -36,7 +36,7 @@ let rec is_arrow_type t =
   | Types.Ttuple _
   | Types.Tconstr _
   | Types.Tvar _ | Types.Tunivar _ | Types.Tobject _ | Types.Tpoly _
-  | Types.Tfield _ | Types.Tnil | Types.Tvariant _ | Types.Tpackage _ -> false
+  | Types.Tfield _ | Types.Tnil | Types.Tvarian2 _ | Types.Tpackage _ -> false
   | Types.Tsubst _ -> assert false
 
 let raw_string_of_type_list sep type_list =
@@ -48,7 +48,7 @@ let raw_string_of_type_list sep type_list =
     | Types.Tlink t2 -> need_parent t2
     | Types.Tconstr _
     | Types.Tvar _ | Types.Tunivar _ | Types.Tobject _ | Types.Tpoly _
-    | Types.Tfield _ | Types.Tnil | Types.Tvariant _ | Types.Tpackage _ -> false
+    | Types.Tfield _ | Types.Tnil | Types.Tvarian2 _ | Types.Tpackage _ -> false
     | Types.Tsubst _ -> assert false
   in
   let print_one_type variance t =

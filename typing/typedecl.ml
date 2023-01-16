@@ -174,17 +174,7 @@ let set_private_row env loc p decl =
   in
   let rv =
     match get_desc tm with
-      Tvariant row ->
-        let Row {fields; more; closed; name} = row_repr row in
-        set_type_desc tm
-          (Tvariant (create_row ~fields ~more ~closed ~name
-                       ~fixed:(Some Fixed_private)));
-        if Btype.static_row row then
-          (* the syntax hinted at the existence of a row variable,
-             but there is in fact no row variable to make private, e.g.
-             [ type t = private [< `A > `A] ] *)
-          raise (Error(loc, Invalid_private_row_declaration tm))
-        else more
+      Tvarian2 _ -> assert false
     | Tobject (ty, _) ->
         let r = snd (Ctype.flatten_fields ty) in
         if not (Btype.is_Tvar r) then
@@ -663,7 +653,7 @@ let check_well_founded env loc path to_check ty =
       match get_desc ty with
         Tconstr(p,_,_) ->
           !Clflags.recursive_types && Ctype.is_contractive env p
-      | Tobject _ | Tvariant _ -> true
+      | Tobject _ | Tvarian2 _ -> true
       | _ -> !Clflags.recursive_types
     in
     let visited' = TypeMap.add ty parents !visited in
@@ -1653,15 +1643,7 @@ let explain_unbound_single ppf tv ty =
       if eq_type rv tv then trivial ty else
       explain_unbound ppf tv tl (fun (_,_,t) -> t)
         "method" (fun (lab,_,_) -> lab ^ ": ")
-  | Tvariant row ->
-      if eq_type (row_more row) tv then trivial ty else
-      explain_unbound ppf tv (row_fields row)
-        (fun (_l,f) -> match row_field_repr f with
-          Rpresent (Some t) -> t
-        | Reither (_,[t],_) -> t
-        | Reither (_,tl,_) -> Btype.newgenty (Ttuple tl)
-        | _ -> Btype.newgenty (Ttuple[]))
-        "case" (fun (lab,_) -> "`" ^ lab ^ " of ")
+  | Tvarian2 _ -> assert false
   | _ -> trivial ty
 
 

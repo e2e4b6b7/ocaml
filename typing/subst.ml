@@ -172,10 +172,6 @@ let rec typexp copy_scope s ty =
       && field_kind_repr k <> Fabsent && get_level ty < generic_level ->
       (* do not copy the type of self when it is not generalized *)
       ty
-(* cannot do it, since it would omit substitution
-  | Tvariant row when not (static_row row) ->
-      ty
-*)
   | _ ->
     let tm = row_of_type ty in
     let has_fixed_row =
@@ -216,49 +212,7 @@ let rec typexp copy_scope s ty =
                 else Some (type_path s p, List.map (typexp copy_scope s) tl)
           in
           Tobject (t1', ref name')
-      | Tvariant row ->
-          let more = row_more row in
-          let mored = get_desc more in
-          (* We must substitute in a subtle way *)
-          (* Tsubst takes a tuple containing the row var and the variant *)
-          begin match mored with
-            Tsubst (_, Some ty2) ->
-              (* This variant type has been already copied *)
-              (* Change the stub to avoid Tlink in the new type *)
-              For_copy.redirect_desc copy_scope ty (Tsubst (ty2, None));
-              Tlink ty2
-          | _ ->
-              let dup =
-                s.for_saving || get_level more = generic_level ||
-                static_row row || is_Tconstr more in
-              (* Various cases for the row variable *)
-              let more' =
-                match mored with
-                  Tsubst (ty, None) -> ty
-                | Tconstr _ | Tnil -> typexp copy_scope s more
-                | Tunivar _ | Tvar _ ->
-                    if s.for_saving then newpersty (norm mored)
-                    else if dup && is_Tvar more then newgenty mored
-                    else more
-                | _ -> assert false
-              in
-              (* Register new type first for recursion *)
-              For_copy.redirect_desc copy_scope more
-                (Tsubst (more', Some ty'));
-              (* TODO: check if more' can be eliminated *)
-              (* Return a new copy *)
-              let row =
-                copy_row (typexp copy_scope s) true row (not dup) more' in
-              match row_name row with
-              | Some (p, tl) ->
-                  let name =
-                    if to_subst_by_type_function s p then None
-                    else Some (type_path s p, tl)
-                  in
-                  Tvariant (set_row_name row name)
-              | None ->
-                  Tvariant row
-          end
+      (* | Tvarian2 _ -> assert false *)
       | Tfield(_label, kind, _t1, t2) when field_kind_repr kind = Fabsent ->
           Tlink (typexp copy_scope s t2)
       | _ -> copy_type_desc (typexp copy_scope s) desc

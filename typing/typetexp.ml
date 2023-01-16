@@ -280,7 +280,7 @@ and transl_type_aux env policy styp =
               None -> raise Not_found
             | Some ty ->
                 match get_desc ty with
-                  Tvariant row when Btype.static_row row -> ()
+                  Tvarian2 _ -> () (* romanv: todo: ??? *)
                 | Tconstr (path, _, _) ->
                     check (Env.find_type path env)
                 | _ -> raise Not_found
@@ -318,22 +318,7 @@ and transl_type_aux env policy styp =
         let ty_args = List.map (fun ctyp -> ctyp.ctyp_type) args in
       let ty = Ctype.expand_head env (newconstr path ty_args) in
       let ty = match get_desc ty with
-        Tvariant row ->
-          let fields =
-            List.map
-              (fun (l,f) -> l,
-                match row_field_repr f with
-                | Rpresent oty -> rf_either_of oty
-                | _ -> f)
-              (row_fields row)
-          in
-          (* NB: row is always non-static here; more is thus never Tnil *)
-          let more =
-            if policy = Univars then new_pre_univar () else newvar () in
-          let row =
-            create_row ~fields ~more
-              ~closed:true ~fixed:None ~name:(Some (path, ty_args)) in
-          newty (Tvariant row)
+        Tvarian2 _ -> ty (* romanv: todo: ??? *)
       | Tobject (fi, _) ->
           let _, tv = flatten_fields fi in
           if policy = Univars then pre_univars := tv :: !pre_univars;
@@ -382,9 +367,7 @@ and transl_type_aux env policy styp =
       ctyp (Ttyp_alias (cty, alias)) cty.ctyp_type
   | Ptyp_variant(fields, closed, present) ->
       let name = ref None in
-      let mkfield l f =
-        newty (Tvariant (create_row ~fields:[l,f] ~more:(newvar())
-                           ~closed:true ~fixed:None ~name:None)) in
+      let mkfield l f = newty (Tvarian2 (Tag (l,f))) in
       let hfields = Hashtbl.create 17 in
       let add_typed_field loc l f =
         let h = Btype.hash_variant l in
@@ -433,8 +416,8 @@ and transl_type_aux env policy styp =
             in
             name := if Hashtbl.length hfields <> 0 then None else nm;
             let fl = match get_desc (expand_head env cty.ctyp_type), nm with
-              Tvariant row, _ when Btype.static_row row ->
-                row_fields row
+              Tvarian2 row, _ ->
+                row2_fields row (* romanv: todo: ??? *)
             | Tvar _, Some(p, _) ->
                 raise(Error(sty.ptyp_loc, env, Undefined_type_constructor p))
             | _ ->
@@ -465,15 +448,15 @@ and transl_type_aux env policy styp =
               raise(Error(styp.ptyp_loc, env, Present_has_no_type l)))
             present
       end;
-      let name = !name in
-      let make_row more =
-        create_row ~fields ~more ~closed:(closed = Closed) ~fixed:None ~name
+      let row2 = List.fold_left 
+        (fun ty tag -> 
+          let (l, f) = tag in
+          let new_ty = Tag (l, f) in
+          if ty == Zero then new_ty else Union (ty, new_ty))
+        Zero
+        fields
       in
-      let more =
-        if Btype.static_row (make_row (newvar ())) then newty Tnil else
-        if policy = Univars then new_pre_univar () else newvar ()
-      in
-      let ty = newty (Tvariant (make_row more)) in
+      let ty = newty (Tvarian2 row2) in
       ctyp (Ttyp_variant (tfields, closed, present)) ty
   | Ptyp_poly(vars, st) ->
       let vars = List.map (fun v -> v.txt) vars in
@@ -582,22 +565,7 @@ and transl_fields env policy o fields =
 let rec make_fixed_univars ty =
   if Btype.try_mark_node ty then
     begin match get_desc ty with
-    | Tvariant row ->
-        let Row {fields; more; name; closed} = row_repr row in
-        if Btype.is_Tunivar more then
-          let fields =
-            List.map
-              (fun (s,f as p) -> match row_field_repr f with
-                Reither (no_arg, tl, _m) ->
-                  s, rf_either tl ~use_ext_of:f ~no_arg ~matched:true
-              | _ -> p)
-              fields
-          in
-          set_type_desc ty
-            (Tvariant
-               (create_row ~fields ~more ~name ~closed
-                  ~fixed:(Some (Univar more))));
-        Btype.iter_row make_fixed_univars row
+    | Tvarian2 _ -> ()
     | _ ->
         Btype.iter_type_expr make_fixed_univars ty
     end

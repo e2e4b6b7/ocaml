@@ -445,31 +445,8 @@ module Make(O : OBJ)(EVP : EVALPATH with type valu = O.t) = struct
               | Datarepr.Constr_not_found -> (* raised by find_constr_by_tag *)
                   Oval_stuff "<unknown constructor>"
               end
-          | Tvariant row ->
-              if O.is_block obj then
-                let tag : int = O.obj (O.field obj 0) in
-                let rec find = function
-                  | (l, f) :: fields ->
-                      if Btype.hash_variant l = tag then
-                        match row_field_repr f with
-                        | Rpresent(Some ty) | Reither(_,[ty],_) ->
-                            let args =
-                              nest tree_of_val (depth - 1) (O.field obj 1) ty
-                            in
-                              Oval_variant (l, Some args)
-                        | _ -> find fields
-                      else find fields
-                  | [] -> Oval_stuff "<variant>" in
-                find (row_fields row)
-              else
-                let tag : int = O.obj obj in
-                let rec find = function
-                  | (l, _) :: fields ->
-                      if Btype.hash_variant l = tag then
-                        Oval_variant (l, None)
-                      else find fields
-                  | [] -> Oval_stuff "<variant>" in
-                find (row_fields row)
+          | Tvarian2 _ -> (* romanv: not understand *)
+              Oval_stuff "<variant2>"
           | Tobject (_, _) ->
               Oval_stuff "<obj>"
           | Tsubst _ | Tfield(_, _, _, _) | Tnil | Tlink _ ->

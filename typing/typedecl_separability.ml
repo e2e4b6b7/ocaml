@@ -141,7 +141,7 @@ let rec immediate_subtypes : type_expr -> type_expr list = fun ty ->
         | Some(_,tys) -> tys
       in
       immediate_subtypes_object_row class_subtys row
-  | Tvariant(row) ->
+  | Tvarian2 (row) ->
       immediate_subtypes_variant_row [] row
 
   (* the cases below are not called from [check_type],
@@ -162,26 +162,7 @@ and immediate_subtypes_object_row acc ty = match get_desc ty with
       immediate_subtypes_object_row acc rest
   | _ -> ty :: acc
 
-and immediate_subtypes_variant_row acc desc =
-  let add_subtypes acc =
-    let add_subtype acc (_l, rf) =
-      immediate_subtypes_variant_row_field acc rf in
-    List.fold_left add_subtype acc (row_fields desc) in
-  let add_row acc =
-    let row = row_more desc in
-    match get_desc row with
-    | Tvariant more -> immediate_subtypes_variant_row acc more
-    | _ -> row :: acc
-  in
-  add_row (add_subtypes acc)
-
-and immediate_subtypes_variant_row_field acc f =
-  match row_field_repr f with
-  | Rpresent(None)
-  | Rabsent            -> acc
-  | Rpresent(Some(ty)) -> ty :: acc
-  | Reither(_,field_types,_) ->
-      List.rev_append field_types acc
+and immediate_subtypes_variant_row _ _ = assert false
 
 let free_variables ty =
   Ctype.free_variables ty
@@ -406,14 +387,14 @@ let check_type
     (* "Separable" case for constructors with known memory representation. *)
     | (Tarrow _           , Sep    )
     | (Ttuple _           , Sep    )
-    | (Tvariant(_)        , Sep    )
+    | (Tvarian2(_)        , Sep    )
     | (Tobject(_,_)       , Sep    )
     | ((Tnil | Tfield _)  , Sep    )
     | (Tpackage(_,_)      , Sep    ) -> empty
     (* "Deeply separable" case for these same constructors. *)
     | (Tarrow _           , Deepsep)
     | (Ttuple _           , Deepsep)
-    | (Tvariant(_)        , Deepsep)
+    | (Tvarian2(_)        , Deepsep)
     | (Tobject(_,_)       , Deepsep)
     | ((Tnil | Tfield _)  , Deepsep)
     | (Tpackage(_,_)      , Deepsep) ->

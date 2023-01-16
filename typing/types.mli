@@ -117,8 +117,7 @@ type type_desc =
       a polymorphic variant.  It then contains a copy of the whole variant.
       This constructor should not appear outside of these cases. *)
 
-  | Tvariant of row_desc
-  (** Representation of polymorphic variants, see [row_desc]. *)
+  | Tvarian2 of row2
 
   | Tunivar of string option
   (** Occurrence of a type variable introduced by a
@@ -131,6 +130,13 @@ type type_desc =
 
   | Tpackage of Path.t * (Longident.t * type_expr) list
   (** Type of a first-class module (a.k.a package). *)
+
+and row2 =
+  | Tag of label * row_field
+  | Union of row2 * row2
+  | Negation of row2
+  | Zero
+  | Var of type_expr
 
 and fixed_explanation =
   | Univar of type_expr (** The row type was bound to an univar *)
@@ -272,33 +278,6 @@ val compare_type: type_expr -> type_expr -> int
 
 (** Constructor and accessors for [row_desc] *)
 
-(** [  `X | `Y ]       (row_closed = true)
-    [< `X | `Y ]       (row_closed = true)
-    [> `X | `Y ]       (row_closed = false)
-    [< `X | `Y > `X ]  (row_closed = true)
-
-    type t = [> `X ] as 'a      (row_more = Tvar a)
-    type t = private [> `X ]    (row_more = Tconstr ("t#row", [], ref Mnil))
-
-    And for:
-
-        let f = function `X -> `X -> | `Y -> `X
-
-    the type of "f" will be a [Tarrow] whose lhs will (basically) be:
-
-        Tvariant { row_fields = [("X", _)];
-                   row_more   =
-                     Tvariant { row_fields = [("Y", _)];
-                                row_more   =
-                                  Tvariant { row_fields = [];
-                                             row_more   = _;
-                                             _ };
-                                _ };
-                   _
-                 }
-
-*)
-
 val create_row:
   fields:(label * row_field) list ->
   more:type_expr ->
@@ -306,6 +285,8 @@ val create_row:
   fixed:fixed_explanation option ->
   name:(Path.t * type_expr list) option -> row_desc
 
+val row2_fields: row2 -> (label * row_field) list
+val get_row2_field: label -> row2 -> row_field
 val row_fields: row_desc -> (label * row_field) list
 val row_more: row_desc -> type_expr
 val row_closed: row_desc -> bool
