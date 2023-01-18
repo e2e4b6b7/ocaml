@@ -158,9 +158,6 @@ val unmark_iterators: type_iterators
 val copy_type_desc:
     ?keep_names:bool -> (type_expr -> type_expr) -> type_desc -> type_desc
         (* Copy on types *)
-val copy_row:
-    (type_expr -> type_expr) ->
-    bool -> row_desc -> bool -> type_expr -> row_desc
 
 module For_copy : sig
 
@@ -177,7 +174,12 @@ module For_copy : sig
   val with_scope: (copy_scope -> 'a) -> 'a
         (* [with_scope f] calls [f] and restores saved type descriptions
            before returning its result. *)
+
+  val register_var_copy: copy_scope -> type_expr -> type_expr -> unit
 end
+
+val copy_row:
+  For_copy.copy_scope -> (type_expr -> type_expr) -> bool -> type_expr -> row_desc -> row_desc
 
 val lowest_level: int
         (* Marked type: ty.level < lowest_level *)

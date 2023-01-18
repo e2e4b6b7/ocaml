@@ -342,7 +342,7 @@ let unify_exp_types loc env ty expected_ty =
   (* Format.eprintf "@[%a@ %a@]@." Printtyp.raw_type_expr exp.exp_type
     Printtyp.raw_type_expr expected_ty; *)
   try
-    unify env ty expected_ty
+    unify ~relation:Right env ty expected_ty
   with
     Unify err ->
       raise(Error(loc, env, Expr_type_clash(err, None, None)))
@@ -363,10 +363,10 @@ let unify_pat_types_return_equated_pairs ?(refine = None) loc env ty ty' =
   try
     match refine with
     | Some allow_recursive ->
-        unify_gadt ~equations_level:(get_gadt_equations_level ())
+        unify_gadt ~relation:Equal ~equations_level:(get_gadt_equations_level ())
           ~allow_recursive env ty ty'
     | None ->
-        unify !env ty ty';
+        unify ~relation:Equal !env ty ty';
         nothing_equated
   with
   | Unify err ->
@@ -391,31 +391,8 @@ let unify_head_only ~refine loc env ty constr =
 
 (* Creating new conjunctive types is not allowed when typing patterns *)
 (* make all Reither present in open variants *)
-let finalize_variant pat tag opat r =
-  let row =
-    match get_desc (expand_head pat.pat_env pat.pat_type) with
-      Tvariant row -> r := row; row
-    | _ -> assert false
-  in
-  let f = get_row_field tag row in
-  begin match row_field_repr f with
-  | Rabsent -> () (* assert false *)
-  | Reither (true, [], _) when not (row_closed row) ->
-      link_row_field_ext ~inside:f (rf_present None)
-  | Reither (false, ty::tl, _) when not (row_closed row) ->
-      link_row_field_ext ~inside:f (rf_present (Some ty));
-      begin match opat with None -> assert false
-      | Some pat ->
-          let env = ref pat.pat_env in List.iter (unify_pat env pat) (ty::tl)
-      end
-  | Reither (c, _l, true) when not (has_fixed_explanation row) ->
-      link_row_field_ext ~inside:f (rf_either [] ~no_arg:c ~matched:false)
-  | _ -> ()
-  end
-  (* Force check of well-formedness   WHY? *)
-  (* unify_pat pat.pat_env pat
-    (newty(Tvariant{row_fields=[]; row_more=newvar(); row_closed=false;
-                    row_bound=(); row_fixed=false; row_name=None})); *)
+(* set-theoretic: todo: requires validation *)
+let finalize_variant _pat _tag _opat _r = ()
 
 let has_variants p =
   exists_general_pattern
@@ -565,9 +542,9 @@ and build_as_type_aux ~refine (env : Env.t ref) p =
       ty_res
   | Tpat_variant(l, p', _) ->
       let ty = Option.map (build_as_type env) p' in
-      let fields = [l, rf_present ty] in
-      newty (Tvariant (create_row ~fields ~more:(newvar())
-                         ~name:None ~fixed:None ~closed:false))
+      let kind = [l, ty] in
+      let row = create_row ~from:"build_as_type_aux" ~var:(newvar ()) ~kind ~name:None ~fixed:None in
+      newty (Tvariant row)
   | Tpat_record (lpl,_) ->
       let lbl = snd3 (List.hd lpl) in
       if lbl.lbl_private = Private then p.pat_type else
@@ -590,17 +567,10 @@ and build_as_type_aux ~refine (env : Env.t ref) p =
         end in
       Array.iter do_label lbl.lbl_all;
       ty
-  | Tpat_or(p1, p2, row) ->
-      begin match row with
-        None ->
-          let ty1 = build_as_type env p1 and ty2 = build_as_type env p2 in
-          unify_pat ~refine env {p2 with pat_type = ty2} ty1;
-          ty1
-      | Some row ->
-          let Row {fields; fixed; name} = row_repr row in
-          newty (Tvariant (create_row ~fields ~fixed ~name
-                             ~closed:false ~more:(newvar())))
-      end
+  | Tpat_or(p1, p2, _) ->
+      let ty1 = build_as_type env p1 and ty2 = build_as_type env p2 in
+      unify_pat ~refine env {p2 with pat_type = ty2} ty1;
+      ty1
   | Tpat_any | Tpat_var _ | Tpat_constant _
   | Tpat_array _ | Tpat_lazy _ -> p.pat_type
 
@@ -784,10 +754,10 @@ let solve_Ppat_constraint ~refine loc env sty expected_ty =
   (cty, ty, expected_ty')
 
 let solve_Ppat_variant ~refine loc env tag no_arg expected_ty =
-  let arg_type = if no_arg then [] else [newgenvar()] in
-  let fields = [tag, rf_either ~no_arg arg_type ~matched:true] in
-  let make_row more =
-    create_row ~fields ~closed:false ~more ~fixed:None ~name:None
+  let arg_type = if no_arg then None else Some (newgenvar()) in
+  let kind = [tag, arg_type] in
+  let make_row var =
+    create_row ~from:"solve_Ppat_variant" ~var ~kind ~fixed:None ~name:None
   in
   let row = make_row (newgenvar ()) in
   let expected_ty = generic_instance expected_ty in
@@ -807,26 +777,21 @@ let build_or_pat env loc lid =
       Tvariant row when static_row row -> row
     | _ -> raise(Error(lid.loc, env, Not_a_polymorphic_variant_type lid.txt))
   in
-  let pats, fields =
+  let kind = row_kind row0 in
+  let pats =
     List.fold_left
-      (fun (pats,fields) (l,f) ->
-        match row_field_repr f with
-          Rpresent None ->
-            let f = rf_either [] ~no_arg:true ~matched:true in
-            (l,None) :: pats,
-            (l, f) :: fields
-        | Rpresent (Some ty) ->
-            let f = rf_either [ty] ~no_arg:false ~matched:true in
+      (fun pats (l,f) ->
+        match f with
+          None ->
+            (l,None) :: pats
+        | (Some ty) ->
             (l, Some {pat_desc=Tpat_any; pat_loc=Location.none; pat_env=env;
                       pat_type=ty; pat_extra=[]; pat_attributes=[]})
-            :: pats,
-            (l, f) :: fields
-        | _ -> pats, fields)
-      ([],[]) (row_fields row0) in
-  let fields = List.rev fields in
+            :: pats)
+      [] kind in
   let name = Some (path, tyl) in
-  let make_row more =
-    create_row ~fields ~more ~closed:false ~fixed:None ~name in
+  let make_row var =
+    create_row ~from:"build_or_pat" ~var ~kind ~fixed:None ~name in
   let ty = newty (Tvariant (make_row (newvar()))) in
   let gloc = {loc with Location.loc_ghost=true} in
   let row' = ref (make_row (newvar())) in
@@ -1877,8 +1842,8 @@ and type_pat_aux
       in begin
         (* PR#6235: propagate type information *)
         match sarg, arg_type with
-          Some p, [ty] -> type_pat Value p ty (fun p -> k (Some p))
-        | _            -> k None
+          Some p, Some ty -> type_pat Value p ty (fun p -> k (Some p))
+        | _               -> k None
       end
   | Ppat_record(lid_sp_list, closed) ->
       assert (lid_sp_list <> []);
@@ -2641,23 +2606,8 @@ let self_coercion = ref ([] : (Path.t * Location.t list ref) list)
 
 (* Helpers for type_cases *)
 
-let contains_variant_either ty =
-  let rec loop ty =
-    if try_mark_node ty then
-      begin match get_desc ty with
-        Tvariant row ->
-          if not (is_fixed row) then
-            List.iter
-              (fun (_,f) ->
-                match row_field_repr f with Reither _ -> raise Exit | _ -> ())
-              (row_fields row);
-          iter_row loop row
-      | _ ->
-          iter_type_expr loop ty
-      end
-  in
-  try loop ty; unmark_type ty; false
-  with Exit -> unmark_type ty; true
+(* set-theoretic: todo: review and remove *)
+let contains_variant_either _ty = false
 
 let shallow_iter_ppat f p =
   match p.ppat_desc with
@@ -2709,25 +2659,8 @@ let may_contain_gadts p =
    | _ -> false)
   p
 
-let check_absent_variant env =
-  iter_general_pattern { f = fun (type k) (pat : k general_pattern) ->
-    match pat.pat_desc with
-    | Tpat_variant (s, arg, row) ->
-      let row = !row in
-      if List.exists (fun (s',fi) -> s = s' && row_field_repr fi <> Rabsent)
-          (row_fields row)
-      || not (is_fixed row) && not (static_row row)  (* same as Ctype.poly *)
-      then () else
-      let ty_arg =
-        match arg with None -> [] | Some p -> [correct_levels p.pat_type] in
-      let fields = [s, rf_either ty_arg ~no_arg:(arg=None) ~matched:true] in
-      let row' =
-        create_row ~fields
-          ~more:(newvar ()) ~closed:false ~fixed:None ~name:None in
-      (* Should fail *)
-      unify_pat (ref env) {pat with pat_type = newty (Tvariant row')}
-                          (correct_levels pat.pat_type)
-    | _ -> () }
+(* set-theoretic: todo: requires verification *)
+let check_absent_variant _env _gp = ()
 
 (* Getting proper location of already typed expressions.
 
@@ -3098,10 +3031,10 @@ and type_expect_
       with
       | Some sarg, Tvariant row, Tvariant row0 ->
           begin match
-            row_field_repr (get_row_field l row),
-            row_field_repr (get_row_field l row0)
+            get_row_field l row,
+            get_row_field l row0
           with
-            Rpresent (Some ty), Rpresent (Some ty0) ->
+            Some Some ty, Some Some ty0 ->
               let arg = type_argument env sarg ty ty0 in
               re { exp_desc = Texp_variant(l, Some arg);
                    exp_loc = loc; exp_extra = [];
@@ -3116,12 +3049,13 @@ and type_expect_
         let arg_type = Option.map (fun arg -> arg.exp_type) arg in
         let row =
           create_row
-            ~fields: [l, rf_present arg_type]
-            ~more:   (newvar ())
-            ~closed: false
+            ~from: "type_expect_"
+            ~var: (newvar ())
+            ~kind: [l, arg_type]
             ~fixed:  None
             ~name:   None
         in
+        add_polyvariant_tags_constrint Left row [l];
         rue {
           exp_desc = Texp_variant(l, arg);
           exp_loc = loc; exp_extra = [];
@@ -3431,7 +3365,8 @@ and type_expect_
                   let snap = snapshot () in
                   let ty, _b = enlarge_type env ty' in
                   try
-                    force (); Ctype.unify env arg.exp_type ty; true
+                    (* set-theoretic: todo: verify relation *)
+                    force (); Ctype.unify ~relation:Right env arg.exp_type ty; true
                   with Unify _ ->
                     backtrack snap; false
                 then ()
@@ -3448,7 +3383,7 @@ and type_expect_
             | _ ->
                 let ty, b = enlarge_type env ty' in
                 force ();
-                begin try Ctype.unify env arg.exp_type ty with Unify err ->
+                begin try Ctype.unify ~relation:Right env arg.exp_type ty with Unify err ->
                   let expanded = full_expand ~may_forget_scope:true env ty' in
                   raise(Error(sarg.pexp_loc, env,
                               Coercion_failure({ty = ty'; expanded}, err, b)))
@@ -4042,7 +3977,7 @@ and type_function ?(in_function : (Location.t * type_expr) option)
     if is_optional arg_label then
       let tv = newvar() in
       begin
-        try unify env ty_arg (type_option tv)
+        try unify ~relation:Right env ty_arg (type_option tv)
         with Unify _ -> assert false
       end;
       type_option tv
@@ -4356,7 +4291,7 @@ and type_label_exp create env loc ty_expected
     generalize_structure ty_res
   end;
   begin try
-    unify env (instance ty_res) (instance ty_expected)
+    unify ~relation:Right env (instance ty_res) (instance ty_expected)
   with Unify err ->
     raise (Error(lid.loc, env, Label_mismatch(lid.txt, err)))
   end;
@@ -4536,7 +4471,7 @@ and type_application env funct sargs =
           then
             Location.prerr_warning sarg.pexp_loc
               Warnings.Ignored_extra_argument;
-          unify env ty_fun (newty (Tarrow(lbl,t1,t2,commu_var ())));
+          unify ~relation:Left env ty_fun (newty (Tarrow(lbl,t1,t2,commu_var ())));
           (t1, t2)
       | Tarrow (l,t1,t2,_) when l = lbl
         || !Clflags.classic && lbl = Nolabel && not (is_optional l) ->
@@ -4792,6 +4727,7 @@ and type_statement ?explanation env sexp =
   let exp = type_exp env sexp in
   end_def();
   let ty = expand_head env exp.exp_type and tv = newvar() in
+  (* romanv: future *)
   if is_Tvar ty && get_level ty > get_level tv then
     Location.prerr_warning
       (final_subexpression exp).exp_loc
@@ -5369,7 +5305,7 @@ and type_andops env sarg sands expected_ty =
         let let_arg, rest = loop env let_sarg rest ty_rest in
         let exp = type_expect env sexp (mk_expected ty_arg) in
         begin try
-          unify env (instance ty_result) (instance expected_ty)
+          unify  ~relation:Right env (instance ty_result) (instance expected_ty)
         with Unify err ->
           raise(Error(loc, env, Bindings_type_clash(err)))
         end;

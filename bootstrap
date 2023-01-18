@@ -1,0 +1,19 @@
+#!/bin/bash
+
+# set-theoretic: bootstrap script (should be removed)
+
+git checkout 4.14 || exit
+git checkout HEAD -- boot || exit
+##########################################
+make partialclean -j || exit
+### or
+# make clean -j || exit
+# ./configure CFLAGS="-Wno-strict-prototypes -Wno-unused-but-set-variable" || exit
+##########################################
+make world.opt -j || exit
+
+git checkout constraints || exit
+make coreall || exit
+make bootstrap || exit
+make partialclean -j || exit
+make -j || exit

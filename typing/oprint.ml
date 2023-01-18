@@ -251,9 +251,6 @@ let rec print_list pr sep ppf =
   | [a] -> pr ppf a
   | a :: l -> pr ppf a; sep ppf; print_list pr sep ppf l
 
-let pr_present =
-  print_list (fun ppf s -> fprintf ppf "`%s" s) (fun ppf -> fprintf ppf "@ ")
-
 let pr_var = Pprintast.tyvar
 
 let pr_vars =
@@ -300,26 +297,20 @@ and print_simple_out_type ppf =
       fprintf ppf "@[<2>< %a >@]" (print_fields rest) fields
   | Otyp_stuff s -> pp_print_string ppf s
   | Otyp_var (ng, s) -> pr_var ppf (if ng then "_" ^ s else s)
-  | Otyp_variant (non_gen, row_fields, closed, tags) ->
-      let print_present ppf =
-        function
-          None | Some [] -> ()
-        | Some l -> fprintf ppf "@;<1 -2>> @[<hov>%a@]" pr_present l
+  | Otyp_variant fields -> begin
+      let print_fields =
+        print_list print_row_field (fun ppf -> fprintf ppf "@;<1 -2>| ")
       in
-      let print_fields ppf =
-        function
-          Ovar_fields fields ->
-            print_list print_row_field (fun ppf -> fprintf ppf "@;<1 -2>| ")
-              ppf fields
-        | Ovar_typ typ ->
-           print_simple_out_type ppf typ
-      in
-      fprintf ppf "%s@[<hov>[%s@[<hv>@[<hv>%a@]%a@]@ ]@]"
-        (if non_gen then "_" else "")
-        (if closed then if tags = None then " " else "< "
-         else if tags = None then "> " else "? ")
-        print_fields row_fields
-        print_present tags
+      match fields with
+      | Top -> fprintf ppf "T"
+      | Bot -> fprintf ppf "Bot"
+      | Tags tags ->
+          fprintf ppf "@[<hov>@[<hv>%a@]@]" print_fields tags
+    end
+  | Otyp_setop (op, l, r) ->
+      print_out_type ppf l;
+      fprintf ppf " %s " op;
+      print_out_type ppf r;
   | Otyp_alias _ | Otyp_poly _ | Otyp_arrow _ | Otyp_tuple _ as ty ->
       pp_open_box ppf 1;
       pp_print_char ppf '(';
@@ -360,14 +351,17 @@ and print_fields rest ppf =
       print_fields rest ppf []
   | (s, t) :: l ->
       fprintf ppf "%s : %a;@ %a" s print_out_type t (print_fields rest) l
-and print_row_field ppf (l, opt_amp, tyl) =
+and print_row_field ppf (l, oty) =
   let pr_of ppf =
-    if opt_amp then fprintf ppf " of@ &@ "
-    else if tyl <> [] then fprintf ppf " of@ "
-    else fprintf ppf ""
+    match oty with
+    | Some _ -> fprintf ppf " of@ "
+    | None -> fprintf ppf ""
   in
-  fprintf ppf "@[<hv 2>`%s%t%a@]" l pr_of (print_typlist print_out_type " &")
-    tyl
+  let pr_ty ppf =
+    match oty with
+    | Some ty -> print_out_type ppf ty
+    | None -> () in
+  fprintf ppf "@[<hv 2>`%s%t%t@]" l pr_of pr_ty
 and print_typlist print_elem sep ppf =
   function
     [] -> ()

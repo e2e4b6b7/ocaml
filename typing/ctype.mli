@@ -100,13 +100,13 @@ val set_object_name:
 val remove_object_name: type_expr -> unit
 val find_cltype_for_path: Env.t -> Path.t -> type_declaration * type_expr
 
-val sort_row_fields: (label * row_field) list -> (label * row_field) list
+val sort_row_fields: (label * type_expr option) list -> (label * type_expr option) list
 val merge_row_fields:
-        (label * row_field) list -> (label * row_field) list ->
-        (label * row_field) list * (label * row_field) list *
-        (label * row_field * row_field) list
-val filter_row_fields:
-        bool -> (label * row_field) list -> (label * row_field) list
+        (label * type_expr option) list ->
+        (label * type_expr option) list ->
+        (label * type_expr option) list *
+        (label * type_expr option) list *
+        (label * type_expr option * type_expr option) list
 
 val generalize: type_expr -> unit
         (* Generalize in-place the given type *)
@@ -219,15 +219,20 @@ type typedecl_extraction_result =
 val extract_concrete_typedecl:
         Env.t -> type_expr -> typedecl_extraction_result
 
-val unify: Env.t -> type_expr -> type_expr -> unit
+type unify_relation = Left | Right | Equal | Unknown
+
+val unify: ?relation:unify_relation -> Env.t -> type_expr -> type_expr -> unit
         (* Unify the two types given. Raise [Unify] if not possible. *)
 val unify_gadt:
+        ?relation:unify_relation ->
         equations_level:int -> allow_recursive:bool ->
         Env.t ref -> type_expr -> type_expr -> Btype.TypePairs.t
         (* Unify the two types given and update the environment with the
            local constraints. Raise [Unify] if not possible.
            Returns the pairs of types that have been equated.  *)
-val unify_var: Env.t -> type_expr -> type_expr -> unit
+val unify_var:
+        ?relation:unify_relation ->
+        Env.t -> type_expr -> type_expr -> unit
         (* Same as [unify], but allow free univars when first type
            is a variable. *)
 val filter_arrow: Env.t -> type_expr -> arg_label -> type_expr * type_expr

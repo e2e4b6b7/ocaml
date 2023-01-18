@@ -57,7 +57,6 @@ open Asttypes
  *)
 type type_expr
 type row_desc
-type row_field
 type field_kind
 type commutable
 
@@ -299,60 +298,78 @@ val compare_type: type_expr -> type_expr -> int
 
 *)
 
-val create_row:
-  fields:(label * row_field) list ->
-  more:type_expr ->
-  closed:bool ->
-  fixed:fixed_explanation option ->
-  name:(Path.t * type_expr list) option -> row_desc
+type 'a tail_list
 
-val row_fields: row_desc -> (label * row_field) list
-val row_more: row_desc -> type_expr
-val row_closed: row_desc -> bool
+val tl_flatten : 'a tail_list -> 'a list
+val tl_merge_append: 'a tail_list -> 'a list -> 'a tail_list -> 'a list -> unit
+
+type set_solution =
+  | SSUnion of set_solution * set_solution
+  | SSIntersection of set_solution * set_solution
+  | SSVariable of row_desc
+  | SSTags of
+      string list option * (* lb *)
+      string list option   (* ub *)
+  | SSFail of
+      string list option * (* lb *)
+      string list option   (* ub *)
+
+type constraint_relation = Left | Right | Equal | Unknown
+type row_kind = (label * type_expr option) tail_list
+type row_kind_list = (label * type_expr option) list
+type row_kind_id
+type row_kind_class
+
+val cp_rows: (row_desc * row_desc) list -> unit
+val cp_vars: (type_expr * type_expr) list -> unit
+
+val add_polyvariant_constraint:
+  ?from:string -> constraint_relation -> row_desc -> row_desc -> unit
+val add_polyvariant_tags_constrint:
+  constraint_relation -> row_desc -> label list -> unit
+val add_constraint:
+  ?from:string -> constraint_relation -> type_expr -> type_expr -> unit
+
+val solve_set_type_with_context: row_desc list -> row_desc -> set_solution
+
+val create_row:
+  from: string ->
+  var: type_expr ->
+  kind: row_kind_list ->
+  fixed: fixed_explanation option ->
+  name: (Path.t * type_expr list) option -> row_desc
+
+val row_fields_ub: row_desc -> (label * type_expr option) list option
+val row_fields_lb: row_desc -> (label * type_expr option) list
+val row_kind: row_desc -> row_kind_list
+val row_kind_orig: row_desc -> row_kind
+val row_kind_id: row_desc -> row_kind_id
+val row_kind_class: row_desc -> row_kind_class
 val row_fixed: row_desc -> fixed_explanation option
 val row_name: row_desc -> (Path.t * type_expr list) option
+val row_closed: row_desc -> bool
+val row_var: row_desc -> type_expr
 
 val set_row_name: row_desc -> (Path.t * type_expr list) option -> row_desc
+val merge_row_kinds:
+  (row_kind -> row_kind -> row_kind) -> row_desc -> row_desc -> unit
+val merge_row_kinds_classes:
+  (row_kind -> row_kind -> row_kind) -> row_kind_class -> row_kind_class -> unit
 
-val get_row_field: label -> row_desc -> row_field
+
+val get_row_field: label -> row_desc -> type_expr option option
 
 (** get all fields at once; different from the old [row_repr] *)
 type row_desc_repr =
-    Row of { fields: (label * row_field) list;
-             more:   type_expr;
+    Row of { kind:   row_kind_list;
              closed: bool;
              fixed:  fixed_explanation option;
              name:   (Path.t * type_expr list) option }
 
 val row_repr: row_desc -> row_desc_repr
 
-(** Current contents of a row field *)
-type row_field_view =
-    Rpresent of type_expr option
-  | Reither of bool * type_expr list * bool
-        (* 1st true denotes a constant constructor *)
-        (* 2nd true denotes a tag in a pattern matching, and
-           is erased later *)
-  | Rabsent
-
-val row_field_repr: row_field -> row_field_view
-val rf_present: type_expr option -> row_field
-val rf_absent: row_field
-val rf_either:
-    ?use_ext_of:row_field ->
-    no_arg:bool -> type_expr list -> matched:bool -> row_field
-val rf_either_of: type_expr option -> row_field
-
-val eq_row_field_ext: row_field -> row_field -> bool
-val changed_row_field_exts: row_field list -> (unit -> unit) -> bool
-
-val match_row_field:
-    present:(type_expr option -> 'a) ->
-    absent:(unit -> 'a) ->
-    either:(bool -> type_expr list -> bool -> row_field option ->'a) ->
-    row_field -> 'a
-
-(* *)
+(** Group of variables connected in the constraints graph *)
+val variable_group: type_expr -> type_expr Seq.t
 
 module Uid = Shape.Uid
 
@@ -716,7 +733,6 @@ val set_scope: type_expr -> int -> unit
 val set_name:
     (Path.t * type_expr list) option ref ->
     (Path.t * type_expr list) option -> unit
-val link_row_field_ext: inside:row_field -> row_field -> unit
         (* Extract the extension variable of [inside] and set it to the
            second argument *)
 val set_univar: type_expr option ref -> type_expr -> unit

@@ -449,18 +449,18 @@ module Make(O : OBJ)(EVP : EVALPATH with type valu = O.t) = struct
               if O.is_block obj then
                 let tag : int = O.obj (O.field obj 0) in
                 let rec find = function
-                  | (l, f) :: fields ->
+                  | (l, oty) :: fields ->
                       if Btype.hash_variant l = tag then
-                        match row_field_repr f with
-                        | Rpresent(Some ty) | Reither(_,[ty],_) ->
+                        match oty with
+                        | Some ty ->
                             let args =
                               nest tree_of_val (depth - 1) (O.field obj 1) ty
                             in
                               Oval_variant (l, Some args)
-                        | _ -> find fields
+                        | None -> find fields
                       else find fields
                   | [] -> Oval_stuff "<variant>" in
-                find (row_fields row)
+                find (row_kind row)
               else
                 let tag : int = O.obj obj in
                 let rec find = function
@@ -469,7 +469,7 @@ module Make(O : OBJ)(EVP : EVALPATH with type valu = O.t) = struct
                         Oval_variant (l, None)
                       else find fields
                   | [] -> Oval_stuff "<variant>" in
-                find (row_fields row)
+                find (row_kind row)
           | Tobject (_, _) ->
               Oval_stuff "<obj>"
           | Tsubst _ | Tfield(_, _, _, _) | Tnil | Tlink _ ->

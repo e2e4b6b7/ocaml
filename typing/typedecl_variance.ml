@@ -40,13 +40,18 @@ exception Error of Location.t * error
 let get_variance ty visited =
   try TypeMap.find ty !visited with Not_found -> Variance.null
 
+(* set-theoretic: todo: check if constraints affect varance inference *)
+let set_variance ty vari visited =
+  let tys = variable_group ty in
+  Seq.fold_left (fun visited ty -> TypeMap.add ty vari visited) !visited tys
+
 let compute_variance env visited vari ty =
   let rec compute_variance_rec vari ty =
     (* Format.eprintf "%a: %x@." Printtyp.type_expr ty (Obj.magic vari); *)
     let vari' = get_variance ty visited in
     if Variance.subset vari vari' then () else
     let vari = Variance.union vari vari' in
-    visited := TypeMap.add ty vari !visited;
+    visited := set_variance ty vari visited;
     let compute_same = compute_variance_rec vari in
     match get_desc ty with
       Tarrow (_, ty1, ty2, _) ->
@@ -97,23 +102,12 @@ let compute_variance env visited vari ty =
         assert false
     | Tvariant row ->
         List.iter
-          (fun (_,f) ->
-            match row_field_repr f with
-              Rpresent (Some ty) ->
+          (fun (_,oty) ->
+            match oty with
+            | Some ty ->
                 compute_same ty
-            | Reither (_, tyl, _) ->
-                let open Variance in
-                let upper =
-                  List.fold_left (fun s f -> set f true s)
-                    null [May_pos; May_neg; May_weak]
-                in
-                let v = inter vari upper in
-                (* cf PR#7269:
-                   if List.length tyl > 1 then upper else inter vari upper *)
-                List.iter (compute_variance_rec v) tyl
-            | _ -> ())
-          (row_fields row);
-        compute_same (row_more row)
+            | None -> ())
+          (row_kind row)
     | Tpoly (ty, _) ->
         compute_same ty
     | Tvar _ | Tnil | Tlink _ | Tunivar _ -> ()

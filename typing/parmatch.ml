@@ -231,7 +231,8 @@ let first_column simplified_matrix =
 *)
 
 
-let is_absent tag row = row_field_repr (get_row_field tag !row) = Rabsent
+(* set-theoretic: todo: review and remove *)
+let is_absent _tag _row = false
 
 let is_absent_pat d =
   match d.pat_desc with
@@ -716,29 +717,6 @@ let mark_partial =
     | _ -> set_last zero ps
   )
 
-let close_variant env row =
-  let Row {fields; more; name=orig_name; closed; fixed} = row_repr row in
-  let name, static =
-    List.fold_left
-      (fun (nm, static) (_tag,f) ->
-        match row_field_repr f with
-        | Reither(_, _, false) ->
-            (* fixed=false means that this tag is not explicitly matched *)
-            link_row_field_ext ~inside:f rf_absent;
-            (None, static)
-        | Reither (_, _, true) -> (nm, false)
-        | Rabsent | Rpresent _ -> (nm, static))
-      (orig_name, true) fields in
-  if not closed || name != orig_name then begin
-    let more' = if static then Btype.newgenty Tnil else Btype.newgenvar () in
-    (* this unification cannot fail *)
-    Ctype.unify env more
-      (Btype.newgenty
-         (Tvariant
-            (create_row ~fields:[] ~more:more'
-               ~closed:true ~name ~fixed)))
-  end
-
 (*
   Check whether the first column of env makes up a complete signature or
   not. We work on the discriminating pattern heads of each sub-matrix: they
@@ -753,7 +731,7 @@ let full_match closing env =  match env with
   | Construct { cstr_tag = Cstr_extension _ ; _ } -> false
   | Construct c -> List.length env = c.cstr_consts + c.cstr_nonconsts
   | Variant { type_row; _ } ->
-      let fields =
+      let pat_fields =
         List.map
           (fun (d, _) ->
             match d.pat_desc with
@@ -762,22 +740,19 @@ let full_match closing env =  match env with
           env
       in
       let row = type_row () in
-      if closing && not (Btype.has_fixed_explanation row) then
+      if closing then
         (* closing=true, we are considering the variant as closed *)
         List.for_all
-          (fun (tag,f) ->
-            match row_field_repr f with
-              Rabsent | Reither(_, _, false) -> true
-            | Reither (_, _, true)
-                (* m=true, do not discard matched tags, rather warn *)
-            | Rpresent _ -> List.mem tag fields)
-          (row_fields row)
-      else
-        row_closed row &&
-        List.for_all
-          (fun (tag,f) ->
-            row_field_repr f = Rabsent || List.mem tag fields)
-          (row_fields row)
+          (fun (tag, _) -> List.mem tag pat_fields)
+          (row_fields_lb row)
+      else begin
+        match row_fields_ub row with
+        | None -> false
+        | Some fields ->
+            List.for_all
+              (fun (tag, _) -> List.mem tag pat_fields)
+              fields
+      end
   | Constant Const_char _ ->
       List.length env = 256
   | Constant _
@@ -788,7 +763,7 @@ let full_match closing env =  match env with
 
 (* Written as a non-fragile matching, PR#7451 originated from a fragile matching
    below. *)
-let should_extend ext env = match ext with
+let _should_extend ext env = match ext with
 | None -> false
 | Some ext -> begin match env with
   | [] -> assert false
@@ -942,22 +917,23 @@ let build_other ext env =
                 | Variant { tag } -> tag
                 | _ -> assert false)
               env
-            in
+          in
             let make_other_pat tag const =
               let arg = if const then None else Some Patterns.omega in
               make_pat (Tpat_variant(tag, arg, cstr_row)) d.pat_type d.pat_env
             in
             let row = type_row () in
+            let possible_fields =
+              match row_fields_ub row with
+              | None -> row_kind row
+              | Some fields -> fields
+            in
             begin match
               List.fold_left
-                (fun others (tag,f) ->
+                (fun others (tag,oty) ->
                   if List.mem tag tags then others else
-                  match row_field_repr f with
-                    Rabsent (* | Reither _ *) -> others
-                  (* This one is called after erasing pattern info *)
-                  | Reither (c, _, _) -> make_other_pat tag c :: others
-                  | Rpresent arg -> make_other_pat tag (arg = None) :: others)
-                [] (row_fields row)
+                  make_other_pat tag (oty = None) :: others)
+                [] possible_fields
             with
               [] ->
                 let tag =
@@ -1433,13 +1409,22 @@ let rec pressure_variants tdefs = function
               begin match constrs, tdefs with
               | [], _
               | _, None -> ()
-              | (d, _) :: _, Some env ->
+              | (d, _) :: _, Some _ ->
                 match d.pat_desc with
                 | Variant { type_row; _ } ->
                   let row = type_row () in
                   if Btype.has_fixed_explanation row
                   || pressure_variants None default then ()
-                  else close_variant env row
+                  else
+                    let fields =
+                      List.map
+                        (fun (d, _) ->
+                          match d.pat_desc with
+                          | Patterns.Head.Variant { tag } -> tag
+                          | _ -> assert false)
+                        constrs
+                    in
+                    add_polyvariant_tags_constrint Right row fields
                 | _ -> ()
               end;
               ok

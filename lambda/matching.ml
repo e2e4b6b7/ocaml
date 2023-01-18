@@ -1807,7 +1807,9 @@ let divide_variant ~scopes row ctx { cases = cl; args; default = def } =
         in
         let head = Simple.head p in
         let variants = divide rem in
-        if row_field_repr (get_row_field lab row) = Rabsent then
+        (* set-theoretic: todo: Fix optimization *)
+        (* Optimization that removes unreachable branches *)
+        if ignore (row); false (* get_row_field lab row = None *) then
           variants
         else
           let tag = Btype.hash_variant lab in
@@ -2902,22 +2904,14 @@ let call_switcher_variant_constr loc fail arg int_lambda_list =
 
 let combine_variant loc row arg partial ctx def (tag_lambda_list, total1, _pats)
     =
-  let num_constr = ref 0 in
-  if row_closed row then
-    List.iter
-      (fun (_, f) ->
-        match row_field_repr f with
-        | Rabsent
-        | Reither (true, _ :: _, _) ->
-            ()
-        | _ -> incr num_constr)
-      (row_fields row)
-  else
-    num_constr := max_int;
+  let num_constr =
+    match row_fields_ub row with
+    | None -> max_int;
+    | Some fields -> List.length fields in
   let test_int_or_block arg if_int if_block =
     Lifthenelse (Lprim (Pisint, [ arg ], loc), if_int, if_block)
   in
-  let sig_complete = List.length tag_lambda_list = !num_constr
+  let sig_complete = List.length tag_lambda_list = num_constr
   and one_action = same_actions tag_lambda_list in
   let fail, local_jumps =
     if
