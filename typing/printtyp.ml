@@ -2126,7 +2126,8 @@ let hide_variant_name t =
       newty2 ~level:(get_level t)
         (Tvariant
            (create_row ~fields ~fixed ~closed ~name:None
-              ~more:(newvar2 (get_level more))))
+              ~more:(newvar2 (get_level more))
+              ~set_data:(cp_set_data row)))
   | _ -> t
 
 let prepare_expansion Errortrace.{ty; expanded} =

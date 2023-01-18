@@ -735,7 +735,8 @@ let close_variant env row =
     Ctype.unify env more
       (Btype.newgenty
          (Tvariant
-            (create_row ~fields:[] ~more:more'
+            (create_row ~set_data:(mk_set_data ()) 
+               ~fields:[] ~more:more'
                ~closed:true ~name ~fixed)))
   end
 

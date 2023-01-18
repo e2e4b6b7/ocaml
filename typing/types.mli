@@ -299,7 +299,17 @@ val compare_type: type_expr -> type_expr -> int
 
 *)
 
+type set_data = {
+  set_id: int
+}
+
+val row_set_data: row_desc -> set_data
+val row_set_id: row_desc -> int
+val mk_set_data: unit -> set_data
+val cp_set_data: row_desc -> set_data
+
 val create_row:
+  set_data: set_data ->
   fields:(label * row_field) list ->
   more:type_expr ->
   closed:bool ->

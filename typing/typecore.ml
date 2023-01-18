@@ -567,7 +567,8 @@ and build_as_type_aux ~refine (env : Env.t ref) p =
       let ty = Option.map (build_as_type env) p' in
       let fields = [l, rf_present ty] in
       newty (Tvariant (create_row ~fields ~more:(newvar())
-                         ~name:None ~fixed:None ~closed:false))
+                         ~name:None ~fixed:None ~closed:false
+                         ~set_data:(mk_set_data ())))
   | Tpat_record (lpl,_) ->
       let lbl = snd3 (List.hd lpl) in
       if lbl.lbl_private = Private then p.pat_type else
@@ -599,7 +600,8 @@ and build_as_type_aux ~refine (env : Env.t ref) p =
       | Some row ->
           let Row {fields; fixed; name} = row_repr row in
           newty (Tvariant (create_row ~fields ~fixed ~name
-                             ~closed:false ~more:(newvar())))
+                             ~closed:false ~more:(newvar())
+                             ~set_data:(cp_set_data row)))
       end
   | Tpat_any | Tpat_var _ | Tpat_constant _
   | Tpat_array _ | Tpat_lazy _ -> p.pat_type
@@ -786,8 +788,9 @@ let solve_Ppat_constraint ~refine loc env sty expected_ty =
 let solve_Ppat_variant ~refine loc env tag no_arg expected_ty =
   let arg_type = if no_arg then [] else [newgenvar()] in
   let fields = [tag, rf_either ~no_arg arg_type ~matched:true] in
+  let set_data = mk_set_data () in
   let make_row more =
-    create_row ~fields ~closed:false ~more ~fixed:None ~name:None
+    create_row ~fields ~closed:false ~more ~fixed:None ~name:None ~set_data
   in
   let row = make_row (newgenvar ()) in
   let expected_ty = generic_instance expected_ty in
@@ -825,8 +828,9 @@ let build_or_pat env loc lid =
       ([],[]) (row_fields row0) in
   let fields = List.rev fields in
   let name = Some (path, tyl) in
+  let set_data = mk_set_data () in
   let make_row more =
-    create_row ~fields ~more ~closed:false ~fixed:None ~name in
+    create_row ~fields ~more ~closed:false ~fixed:None ~name ~set_data in
   let ty = newty (Tvariant (make_row (newvar()))) in
   let gloc = {loc with Location.loc_ghost=true} in
   let row' = ref (make_row (newvar())) in
@@ -2721,9 +2725,11 @@ let check_absent_variant env =
       let ty_arg =
         match arg with None -> [] | Some p -> [correct_levels p.pat_type] in
       let fields = [s, rf_either ty_arg ~no_arg:(arg=None) ~matched:true] in
+      let set_data = mk_set_data () in
       let row' =
         create_row ~fields
-          ~more:(newvar ()) ~closed:false ~fixed:None ~name:None in
+          ~more:(newvar ()) ~closed:false ~fixed:None ~name:None ~set_data
+      in
       (* Should fail *)
       unify_pat (ref env) {pat with pat_type = newty (Tvariant row')}
                           (correct_levels pat.pat_type)
@@ -3114,6 +3120,7 @@ and type_expect_
       with Exit ->
         let arg = Option.map (type_exp env) sarg in
         let arg_type = Option.map (fun arg -> arg.exp_type) arg in
+        let set_data = mk_set_data () in
         let row =
           create_row
             ~fields: [l, rf_present arg_type]
@@ -3121,6 +3128,7 @@ and type_expect_
             ~closed: false
             ~fixed:  None
             ~name:   None
+            ~set_data
         in
         rue {
           exp_desc = Texp_variant(l, arg);

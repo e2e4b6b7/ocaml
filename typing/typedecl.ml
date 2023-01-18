@@ -178,7 +178,8 @@ let set_private_row env loc p decl =
         let Row {fields; more; closed; name} = row_repr row in
         set_type_desc tm
           (Tvariant (create_row ~fields ~more ~closed ~name
-                       ~fixed:(Some Fixed_private)));
+                       ~fixed:(Some Fixed_private)
+                       ~set_data:(cp_set_data row)));
         if Btype.static_row row then
           (* the syntax hinted at the existence of a row variable,
              but there is in fact no row variable to make private, e.g.

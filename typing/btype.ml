@@ -433,7 +433,8 @@ let copy_row f fixed row keep more =
     | None -> None
     | Some (path, tl) -> Some (path, List.map f tl) in
   let fixed = if fixed then orig_fixed else None in
-  create_row ~fields ~more ~fixed ~closed ~name
+  let set_data = cp_set_data row in
+  create_row ~set_data ~fields ~more ~fixed ~closed ~name
 
 let copy_commu c = if is_commu_ok c then commu_ok else commu_var ()
 

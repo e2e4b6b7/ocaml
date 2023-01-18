@@ -42,12 +42,17 @@ and type_desc =
   | Tpoly of type_expr * type_expr list
   | Tpackage of Path.t * (Longident.t * type_expr) list
 
+and set_data = {
+  set_id: int
+}
+
 and row_desc =
     { row_fields: (label * row_field) list;
       row_more: type_expr;
       row_closed: bool;
       row_fixed: fixed_explanation option;
-      row_name: (Path.t * type_expr list) option }
+      row_name: (Path.t * type_expr list) option;
+      set_data: set_data }
 and fixed_explanation =
   | Univar of type_expr | Fixed_private | Reified of Path.t | Rigid
 and row_field = [`some] row_field_gen
@@ -562,9 +567,18 @@ let compare_type t1 t2 = compare (get_id t1) (get_id t2)
 
 (* Constructor and accessors for [row_desc] *)
 
-let create_row ~fields ~more ~closed ~fixed ~name =
+let cur_id = ref 0
+let new_id _ = cur_id := !cur_id + 1; !cur_id
+
+let mk_set_data _ = { set_id=new_id () }
+let cp_set_data _ = { set_id=new_id () } (* romanv: fails on arg usage *)
+let row_set_data row = row.set_data
+let row_set_id row = row.set_data.set_id 
+
+let create_row ~set_data ~fields ~more ~closed ~fixed ~name =
     { row_fields=fields; row_more=more;
-      row_closed=closed; row_fixed=fixed; row_name=name }
+      row_closed=closed; row_fixed=fixed; 
+      row_name=name; set_data=set_data }
 
 (* [row_fields] subsumes the original [row_repr] *)
 let rec row_fields row =

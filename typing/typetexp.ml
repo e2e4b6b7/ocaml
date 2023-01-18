@@ -334,7 +334,8 @@ and transl_type_aux env policy styp =
             if policy = Univars then new_pre_univar () else newvar () in
           let row =
             create_row ~fields ~more
-              ~closed:true ~fixed:None ~name:(Some (path, ty_args)) in
+              ~closed:true ~fixed:None ~name:(Some (path, ty_args))
+              ~set_data:(cp_set_data row) in
           newty (Tvariant row)
       | Tobject (fi, _) ->
           let _, tv = flatten_fields fi in
@@ -386,7 +387,8 @@ and transl_type_aux env policy styp =
       let name = ref None in
       let mkfield l f =
         newty (Tvariant (create_row ~fields:[l,f] ~more:(newvar())
-                           ~closed:true ~fixed:None ~name:None)) in
+                           ~closed:true ~fixed:None ~name:None
+                           ~set_data:(mk_set_data ()))) in
       let hfields = Hashtbl.create 17 in
       let add_typed_field loc l f =
         let h = Btype.hash_variant l in
@@ -468,8 +470,9 @@ and transl_type_aux env policy styp =
             present
       end;
       let name = !name in
+      let set_data = mk_set_data () in
       let make_row more =
-        create_row ~fields ~more ~closed:(closed = Closed) ~fixed:None ~name
+        create_row ~fields ~more ~closed:(closed = Closed) ~fixed:None ~name ~set_data
       in
       let more =
         if Btype.static_row (make_row (newvar ())) then newty Tnil else
@@ -598,7 +601,8 @@ let rec make_fixed_univars ty =
           set_type_desc ty
             (Tvariant
                (create_row ~fields ~more ~name ~closed
-                  ~fixed:(Some (Univar more))));
+                  ~fixed:(Some (Univar more))
+                  ~set_data:(cp_set_data row)));
         Btype.iter_row make_fixed_univars row
     | _ ->
         Btype.iter_type_expr make_fixed_univars ty
