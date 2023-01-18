@@ -1134,7 +1134,7 @@ let rec tree_of_typexp mode ty =
               let non_gen = is_non_gen mode (Transient_expr.type_expr px) in
               let tags =
                 if all_present then None else Some (List.map fst present) in
-              Otyp_variant (non_gen, Ovar_typ out_variant, closed, tags)
+              Otyp_variant (row_set_id row, non_gen, Ovar_typ out_variant, closed, tags)
         | _ ->
             let non_gen =
               not (closed && all_present) &&
@@ -1142,7 +1142,7 @@ let rec tree_of_typexp mode ty =
             let fields = List.map (tree_of_row_field mode) fields in
             let tags =
               if all_present then None else Some (List.map fst present) in
-            Otyp_variant (non_gen, Ovar_fields fields, closed, tags)
+            Otyp_variant (row_set_id row, non_gen, Ovar_fields fields, closed, tags)
         end
     | Tobject (fi, nm) ->
         tree_of_typobject mode fi !nm
