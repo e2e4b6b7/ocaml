@@ -342,7 +342,7 @@ let unify_exp_types loc env ty expected_ty =
   (* Format.eprintf "@[%a@ %a@]@." Printtyp.raw_type_expr exp.exp_type
     Printtyp.raw_type_expr expected_ty; *)
   try
-    unify env ty expected_ty
+    unify ~v:Right env ty expected_ty
   with
     Unify err ->
       raise(Error(loc, env, Expr_type_clash(err, None, None)))
@@ -366,7 +366,7 @@ let unify_pat_types_return_equated_pairs ?(refine = None) loc env ty ty' =
         unify_gadt ~equations_level:(get_gadt_equations_level ())
           ~allow_recursive env ty ty'
     | None ->
-        unify !env ty ty';
+        unify ~v:Right !env ty ty';
         nothing_equated
   with
   | Unify err ->
@@ -3431,7 +3431,7 @@ and type_expect_
                   let snap = snapshot () in
                   let ty, _b = enlarge_type env ty' in
                   try
-                    force (); Ctype.unify env arg.exp_type ty; true
+                    force (); Ctype.unify ~v:Right env arg.exp_type ty; true (* romanv: varance not sure *)
                   with Unify _ ->
                     backtrack snap; false
                 then ()
@@ -3448,7 +3448,7 @@ and type_expect_
             | _ ->
                 let ty, b = enlarge_type env ty' in
                 force ();
-                begin try Ctype.unify env arg.exp_type ty with Unify err ->
+                begin try Ctype.unify ~v:Right env arg.exp_type ty with Unify err ->
                   let expanded = full_expand ~may_forget_scope:true env ty' in
                   raise(Error(sarg.pexp_loc, env,
                               Coercion_failure({ty = ty'; expanded}, err, b)))
@@ -4042,7 +4042,7 @@ and type_function ?(in_function : (Location.t * type_expr) option)
     if is_optional arg_label then
       let tv = newvar() in
       begin
-        try unify env ty_arg (type_option tv)
+        try unify ~v:Right env ty_arg (type_option tv)
         with Unify _ -> assert false
       end;
       type_option tv
@@ -4356,7 +4356,7 @@ and type_label_exp create env loc ty_expected
     generalize_structure ty_res
   end;
   begin try
-    unify env (instance ty_res) (instance ty_expected)
+    unify ~v:Right env (instance ty_res) (instance ty_expected)
   with Unify err ->
     raise (Error(lid.loc, env, Label_mismatch(lid.txt, err)))
   end;
@@ -5369,7 +5369,7 @@ and type_andops env sarg sands expected_ty =
         let let_arg, rest = loop env let_sarg rest ty_rest in
         let exp = type_expect env sexp (mk_expected ty_arg) in
         begin try
-          unify env (instance ty_result) (instance expected_ty)
+          unify  ~v:Right env (instance ty_result) (instance expected_ty)
         with Unify err ->
           raise(Error(loc, env, Bindings_type_clash(err)))
         end;

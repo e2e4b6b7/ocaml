@@ -256,7 +256,9 @@ and transl_type_aux env policy styp =
         match decl.type_manifest with
           None -> unify_var
         | Some ty ->
-            if get_level ty = Btype.generic_level then unify_var else unify
+            if get_level ty = Btype.generic_level 
+              then unify_var
+              else unify ?v:None
       in
       List.iter2
         (fun (sty, cty) ty' ->

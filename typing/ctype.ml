@@ -2601,6 +2601,21 @@ let unify3_var env t1' t2 t2' =
       information is indeed lost, but it probably does not worth it.
 *)
 
+(* Left variance means that left argument should became a supertype of right *)
+type u_variance = | Left | Right | Unknown
+
+let inv v = match v with
+  | Left -> Right
+  | Right -> Left
+  | Unknown -> Unknown
+
+let u_variance = ref Unknown
+  
+let set_u_variance uv f = 
+  Misc.protect_refs [Misc.R (u_variance, uv)] f
+
+let inv_u_variance f = set_u_variance (inv !u_variance) f
+
 let rec unify (env:Env.t ref) t1 t2 =
   (* First step: special cases (optimizations) *)
   if unify_eq t1 t2 then () else
@@ -2713,7 +2728,8 @@ and unify3 env t1 t1' t2 t2' =
         (Tarrow (l1, t1, u1, c1), Tarrow (l2, t2, u2, c2)) when l1 = l2 ||
         (!Clflags.classic || !umode = Pattern) &&
         not (is_optional l1 || is_optional l2) ->
-          unify  env t1 t2; unify env  u1 u2;
+        inv_u_variance (fun  _ -> unify env t1 t2);
+        unify env u1 u2;
           begin match is_commu_ok c1, is_commu_ok c2 with
           | false, true -> set_commu_ok c1
           | true, false -> set_commu_ok c2
@@ -3171,8 +3187,8 @@ let unify_pairs env ty1 ty2 pairs =
   univar_pairs := pairs;
   unify env ty1 ty2
 
-let unify env ty1 ty2 =
-  unify_pairs (ref env) ty1 ty2 []
+let unify ?(v = Unknown) env ty1 ty2 =
+  set_u_variance v (fun _ -> unify_pairs (ref env) ty1 ty2 [])
 
 
 

@@ -219,7 +219,9 @@ type typedecl_extraction_result =
 val extract_concrete_typedecl:
         Env.t -> type_expr -> typedecl_extraction_result
 
-val unify: Env.t -> type_expr -> type_expr -> unit
+type u_variance = | Left | Right | Unknown
+
+val unify: ?v:u_variance -> Env.t -> type_expr -> type_expr -> unit
         (* Unify the two types given. Raise [Unify] if not possible. *)
 val unify_gadt:
         equations_level:int -> allow_recursive:bool ->
