@@ -567,7 +567,10 @@ let compare_type t1 t2 = compare (get_id t1) (get_id t2)
 
 (* Constructor and accessors for [row_desc] *)
 
+let is_not_test = not @@ Sys.file_exists "/tmp/is_test"
+
 let file =
+  if is_not_test then Stdlib.stdout else
   let file = open_out_gen [Open_append; Open_creat] 0o666 "dump.txt" in
   Printf.fprintf file "\n-- New env --\n\n";
   file
@@ -583,11 +586,13 @@ and sprint_variance v = match v with
   | Unknown -> "Unknown"
 
 let set_constraint from ?(v = Right) s1 s2 =
+  if is_not_test then () else
   Printf.fprintf file "From: %s\nVariance: %s\n" from (sprint_variance v);
   Printf.fprintf file "%s -- %s\n\n" (sprint_set_data s1) (sprint_set_data s2);
   flush file
 
 let set_unknown_constraint from =
+  if is_not_test then () else
   Printf.fprintf file "Unknown constraint from: %s\n" from; flush file
 
 let cur_id = ref 0
@@ -598,11 +603,20 @@ let set_id set_data = match set_data with
   | _ -> -1
 let row_set_id row = set_id row.set_data
 
-let mk_set_unknown from = SUnknown from
-let mk_set_var () = SVar (new_id ())
-let mk_set_tags tags = STags tags
-let row_set_data row = row.set_data
+let mk_set_unknown from =
+  if is_not_test then SUnknown "Not in test" else
+  SUnknown from
+let mk_set_var () =
+  if is_not_test then SUnknown "Not in test" else
+  SVar (new_id ())
+let mk_set_tags tags =
+  if is_not_test then SUnknown "Not in test" else
+  STags tags
+let row_set_data row =
+  if is_not_test then SUnknown "Not in test" else
+  row.set_data
 let cp_set_data row =
+  if is_not_test then SUnknown "Not in test" else
   match row.set_data with
   | SVar id ->
       let new_svar = mk_set_var () in

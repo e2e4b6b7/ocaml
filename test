@@ -10,11 +10,11 @@ rm -f testsuite/_ocamltest/tests/typing-misc/polyvars/dump.txt
 
 cd testsuite
 
-touch /home/roman/is_test
+touch /tmp/is_test
 
 make one TEST=tests/typing-misc/polyvars.ml
 
-rm /home/roman/is_test
+rm /tmp/is_test
 rm -f testsuite/tools/dump.txt
 
 echo
