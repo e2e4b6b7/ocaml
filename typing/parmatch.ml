@@ -732,10 +732,12 @@ let close_variant env row =
   if not closed || name != orig_name then begin
     let more' = if static then Btype.newgenty Tnil else Btype.newgenvar () in
     (* this unification cannot fail *)
+    let set_data = mk_set_unknown "close_variant" in
+    set_unknown_constraint "close_variant";
     Ctype.unify env more
       (Btype.newgenty
          (Tvariant
-            (create_row ~set_data:(mk_set_data ()) 
+            (create_row ~set_data
                ~fields:[] ~more:more'
                ~closed:true ~name ~fixed)))
   end

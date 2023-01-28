@@ -256,7 +256,7 @@ and transl_type_aux env policy styp =
         match decl.type_manifest with
           None -> unify_var
         | Some ty ->
-            if get_level ty = Btype.generic_level 
+            if get_level ty = Btype.generic_level
               then unify_var
               else unify ?v:None
       in
@@ -332,10 +332,11 @@ and transl_type_aux env policy styp =
           (* NB: row is always non-static here; more is thus never Tnil *)
           let more =
             if policy = Univars then new_pre_univar () else newvar () in
+          let set_data = cp_set_data row in
           let row =
             create_row ~fields ~more
               ~closed:true ~fixed:None ~name:(Some (path, ty_args))
-              ~set_data:(cp_set_data row) in
+              ~set_data in
           newty (Tvariant row)
       | Tobject (fi, _) ->
           let _, tv = flatten_fields fi in
@@ -386,9 +387,11 @@ and transl_type_aux env policy styp =
   | Ptyp_variant(fields, closed, present) ->
       let name = ref None in
       let mkfield l f =
-        newty (Tvariant (create_row ~fields:[l,f] ~more:(newvar())
+        let fields = [l,f] in
+        let set_data = mk_set_tags [l] in
+        newty (Tvariant (create_row ~fields ~more:(newvar())
                            ~closed:true ~fixed:None ~name:None
-                           ~set_data:(mk_set_data ()))) in
+                           ~set_data)) in
       let hfields = Hashtbl.create 17 in
       let add_typed_field loc l f =
         let h = Btype.hash_variant l in
@@ -470,7 +473,7 @@ and transl_type_aux env policy styp =
             present
       end;
       let name = !name in
-      let set_data = mk_set_data () in
+      let set_data = mk_set_unknown "transl_type_aux" in
       let make_row more =
         create_row ~fields ~more ~closed:(closed = Closed) ~fixed:None ~name ~set_data
       in
@@ -598,11 +601,12 @@ let rec make_fixed_univars ty =
               | _ -> p)
               fields
           in
+          let set_data = cp_set_data row in
           set_type_desc ty
             (Tvariant
                (create_row ~fields ~more ~name ~closed
                   ~fixed:(Some (Univar more))
-                  ~set_data:(cp_set_data row)));
+                  ~set_data));
         Btype.iter_row make_fixed_univars row
     | _ ->
         Btype.iter_type_expr make_fixed_univars ty

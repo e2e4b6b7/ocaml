@@ -2144,7 +2144,7 @@ let reify env t =
                 let path, t = create_fresh_constr level o in
                 let row =
                   let fixed = Some (Reified path) in
-                  let set_data = mk_set_data () in
+                  let set_data = mk_set_unknown "reify" in
                   create_row ~set_data ~fields:[] ~more:t ~fixed
                     ~name:(row_name r) ~closed:(row_closed r) in
                 link_type m (newty2 ~level (Tvariant row));
@@ -2613,8 +2613,8 @@ let inv v = match v with
   | Unknown -> Unknown
 
 let u_variance = ref Unknown
-  
-let set_u_variance uv f = 
+
+let set_u_variance uv f =
   Misc.protect_refs [Misc.R (u_variance, uv)] f
 
 let inv_u_variance f = set_u_variance (inv !u_variance) f
@@ -2938,7 +2938,7 @@ and unify_kind k1 k2 =
   | (Fpublic, Fpublic)               -> ()
   | _                                -> assert false
 
-and unify_row env row1 row2 =
+and unify_row_real env row1 row2 =
   let Row {fields = row1_fields; more = rm1;
            closed = row1_closed; name = row1_name} = row_repr row1 in
   let Row {fields = row2_fields; more = rm2;
@@ -3014,7 +3014,7 @@ and unify_row env row1 row2 =
       if eq_type more rm then () else
       if is_Tvar rm then link_type rm more else unify env rm more
     else
-      let set_data = mk_set_data () in
+      let set_data = mk_set_unknown "unify_row" in (* romanv: unused *)
       let ty =
         newgenty (Tvariant
                     (create_row ~set_data ~fields:rest ~more ~closed ~fixed ~name))
@@ -3044,6 +3044,19 @@ and unify_row env row1 row2 =
     Transient_expr.set_desc tm2 md2;
     raise exn
   end
+
+and variance_coe () = match !u_variance with
+  | Left -> Types.Left
+  | Right -> Types.Right
+  | Unknown -> Types.Unknown
+
+and unify_row env row1 row2 =
+  set_constraint
+    "unify_row"
+    ~v:(variance_coe ())
+    (row_set_data row1)
+    (row_set_data row2);
+  unify_row_real env row1 row2
 
 and unify_row_field env fixed1 fixed2 rm1 rm2 l f1 f2 =
   let if_not_fixed (pos,fixed) f =
@@ -3741,6 +3754,7 @@ and moregen_kind k1 k2 =
   | (Fabsent, _) | (_, Fabsent)      -> assert false
 
 and moregen_row inst_nongen type_pairs env row1 row2 =
+  (* romanv: todo: moregeneral with may inst lead to new constraints *)
   let Row {fields = row1_fields; more = rm1; closed = row1_closed} =
     row_repr row1 in
   let Row {fields = row2_fields; more = rm2; closed = row2_closed;
@@ -3772,7 +3786,7 @@ and moregen_row inst_nongen type_pairs env row1 row2 =
   | _ when static_row row1 -> ()
   | _ when may_inst ->
       let ext =
-        let set_data = mk_set_data () in
+        let set_data = mk_set_unknown "moregen_row" in (* romanv: unused *)
         newgenty (Tvariant
                     (create_row ~set_data ~fields:r2 ~more:rm2 ~name:None
                        ~fixed:row2_fixed ~closed:row2_closed))
@@ -3922,7 +3936,8 @@ let rec rigidify_rec vars ty =
         let Row {more; name; closed} = row_repr row in
         if is_Tvar more && not (has_fixed_explanation row) then begin
           let more' = newty2 ~level:(get_level more) (get_desc more) in
-          let set_data = mk_set_data () in
+          let set_data = mk_set_unknown "rigidify_rec" in
+          (* romanv: unused? rigidify action?? *)
           let row' =
             create_row ~set_data ~fixed:(Some Rigid) ~fields:[] ~more:more'
               ~name ~closed
@@ -4663,9 +4678,16 @@ let rec build_subtype env (visited : transient_expr list)
           fields
       in
       let c = collect fields in
-      let set_data = mk_set_data () in
+      let fields = List.map fst fields in
+      let set_data = mk_set_var () in
+      set_constraint "build_subtype"
+        (mk_set_tags @@ List.map fst fields)
+        set_data;
+      set_constraint "build_subtype2"
+        set_data
+        (row_set_data row);
       let row =
-        create_row ~set_data ~fields:(List.map fst fields) ~more:(newvar ())
+        create_row ~set_data ~fields ~more:(newvar ())
           ~closed:posi ~fixed:None
           ~name:(if c > Unchanged then None else row_name row)
       in
@@ -5005,11 +5027,12 @@ let unalias ty =
       ty
   | Tvariant row ->
       let Row {fields; more; name; fixed; closed} = row_repr row in
+      let set_data = cp_set_data row in
       newty2 ~level
         (Tvariant
            (create_row ~fields ~name ~fixed ~closed
              ~more:(newty2 ~level:(get_level more) (get_desc more))
-             ~set_data:(cp_set_data row)))
+             ~set_data))
   | Tobject (ty, nm) ->
       newty2 ~level (Tobject (unalias_object ty, nm))
   | desc ->
@@ -5124,10 +5147,11 @@ let rec normalize_type_rec visited ty =
       let fields =
         List.sort (fun (p,_) (q,_) -> compare p q)
           (List.filter (fun (_,fi) -> row_field_repr fi <> Rabsent) fields) in
+      let set_data = cp_set_data row in
       set_type_desc ty
         (Tvariant
           (create_row ~fields ~more ~name ~fixed ~closed
-                      ~set_data:(cp_set_data row)))
+                      ~set_data))
     | Tobject (fi, nm) ->
         begin match !nm with
         | None -> ()

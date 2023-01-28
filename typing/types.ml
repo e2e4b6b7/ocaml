@@ -42,9 +42,9 @@ and type_desc =
   | Tpoly of type_expr * type_expr list
   | Tpackage of Path.t * (Longident.t * type_expr) list
 
-and set_data = {
-  set_id: int
-}
+and set_data = SUnknown of string | SVar of int | STags of label list
+
+and set_variance = Left | Right | Unknown
 
 and row_desc =
     { row_fields: (label * row_field) list;
@@ -567,17 +567,52 @@ let compare_type t1 t2 = compare (get_id t1) (get_id t2)
 
 (* Constructor and accessors for [row_desc] *)
 
-let cur_id = ref 0
-let new_id _ = cur_id := !cur_id + 1; !cur_id
+let file =
+  let file = open_out_gen [Open_append; Open_creat] 0o666 "dump.txt" in
+  Printf.fprintf file "\n-- New env --\n\n";
+  file
 
-let mk_set_data _ = { set_id=new_id () }
-let cp_set_data _ = { set_id=new_id () } (* romanv: fails on arg usage *)
+let sprint_set_data set_data = match set_data with
+  | SUnknown from -> Printf.sprintf "Unknown from %s" from
+  | SVar id -> Printf.sprintf "V%d" id
+  | STags tags -> String.concat "" ["[";String.concat "," tags;"]"]
+
+and sprint_variance v = match v with
+  | Left -> "Left"
+  | Right -> "Right"
+  | Unknown -> "Unknown"
+
+let set_constraint from ?(v = Right) s1 s2 =
+  Printf.fprintf file "From: %s\nVariance: %s\n" from (sprint_variance v);
+  Printf.fprintf file "%s -- %s\n\n" (sprint_set_data s1) (sprint_set_data s2);
+  flush file
+
+let set_unknown_constraint from =
+  Printf.fprintf file "Unknown constraint from: %s\n" from; flush file
+
+let cur_id = ref 0
+let new_id () = cur_id := !cur_id + 1; !cur_id
+
+let set_id set_data = match set_data with
+  | SVar id -> id
+  | _ -> -1
+let row_set_id row = set_id row.set_data
+
+let mk_set_unknown from = SUnknown from
+let mk_set_var () = SVar (new_id ())
+let mk_set_tags tags = STags tags
 let row_set_data row = row.set_data
-let row_set_id row = row.set_data.set_id 
+let cp_set_data row =
+  match row.set_data with
+  | SVar id ->
+      let new_svar = mk_set_var () in
+      Printf.fprintf file "Copy %d -> %d\n" id (set_id new_svar);
+      new_svar
+  | _ as sd -> sd
 
 let create_row ~set_data ~fields ~more ~closed ~fixed ~name =
     { row_fields=fields; row_more=more;
-      row_closed=closed; row_fixed=fixed; 
+      row_closed=closed; row_fixed=fixed;
       row_name=name; set_data=set_data }
 
 (* [row_fields] subsumes the original [row_repr] *)

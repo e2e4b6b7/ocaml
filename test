@@ -1,0 +1,21 @@
+#!/bin/bash
+
+rm -f dump.txt
+
+make ocamlc.opt || exit
+make ocamlopt.opt || exit
+
+rm -f dump.txt
+rm -f testsuite/_ocamltest/tests/typing-misc/polyvars/dump.txt
+
+cd testsuite
+
+touch /home/roman/is_test
+
+make one TEST=tests/typing-misc/polyvars.ml
+
+rm /home/roman/is_test
+rm -f testsuite/tools/dump.txt
+
+echo
+cat _ocamltest/tests/typing-misc/polyvars/dump.txt

@@ -2123,11 +2123,12 @@ let hide_variant_name t =
   | Tvariant row ->
       let Row {fields; more; name; fixed; closed} = row_repr row in
       if name = None then t else
+      let set_data = cp_set_data row in
       newty2 ~level:(get_level t)
         (Tvariant
            (create_row ~fields ~fixed ~closed ~name:None
               ~more:(newvar2 (get_level more))
-              ~set_data:(cp_set_data row)))
+              ~set_data))
   | _ -> t
 
 let prepare_expansion Errortrace.{ty; expanded} =

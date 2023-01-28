@@ -566,9 +566,10 @@ and build_as_type_aux ~refine (env : Env.t ref) p =
   | Tpat_variant(l, p', _) ->
       let ty = Option.map (build_as_type env) p' in
       let fields = [l, rf_present ty] in
+      let set_data = mk_set_tags [l] in
       newty (Tvariant (create_row ~fields ~more:(newvar())
                          ~name:None ~fixed:None ~closed:false
-                         ~set_data:(mk_set_data ())))
+                         ~set_data))
   | Tpat_record (lpl,_) ->
       let lbl = snd3 (List.hd lpl) in
       if lbl.lbl_private = Private then p.pat_type else
@@ -599,9 +600,10 @@ and build_as_type_aux ~refine (env : Env.t ref) p =
           ty1
       | Some row ->
           let Row {fields; fixed; name} = row_repr row in
+          let set_data = cp_set_data row in
           newty (Tvariant (create_row ~fields ~fixed ~name
                              ~closed:false ~more:(newvar())
-                             ~set_data:(cp_set_data row)))
+                             ~set_data))
       end
   | Tpat_any | Tpat_var _ | Tpat_constant _
   | Tpat_array _ | Tpat_lazy _ -> p.pat_type
@@ -788,8 +790,10 @@ let solve_Ppat_constraint ~refine loc env sty expected_ty =
 let solve_Ppat_variant ~refine loc env tag no_arg expected_ty =
   let arg_type = if no_arg then [] else [newgenvar()] in
   let fields = [tag, rf_either ~no_arg arg_type ~matched:true] in
-  let set_data = mk_set_data () in
   let make_row more =
+    let tags_data = mk_set_tags [tag] in
+    let set_data = mk_set_var () in
+    set_constraint "solve_Ppat_variant" tags_data set_data;
     create_row ~fields ~closed:false ~more ~fixed:None ~name:None ~set_data
   in
   let row = make_row (newgenvar ()) in
@@ -828,7 +832,7 @@ let build_or_pat env loc lid =
       ([],[]) (row_fields row0) in
   let fields = List.rev fields in
   let name = Some (path, tyl) in
-  let set_data = mk_set_data () in
+  let set_data = mk_set_unknown "build_or_pat" in
   let make_row more =
     create_row ~fields ~more ~closed:false ~fixed:None ~name ~set_data in
   let ty = newty (Tvariant (make_row (newvar()))) in
@@ -2725,7 +2729,7 @@ let check_absent_variant env =
       let ty_arg =
         match arg with None -> [] | Some p -> [correct_levels p.pat_type] in
       let fields = [s, rf_either ty_arg ~no_arg:(arg=None) ~matched:true] in
-      let set_data = mk_set_data () in
+      let set_data = mk_set_unknown "check_absent_variant" in
       let row' =
         create_row ~fields
           ~more:(newvar ()) ~closed:false ~fixed:None ~name:None ~set_data
@@ -3120,7 +3124,7 @@ and type_expect_
       with Exit ->
         let arg = Option.map (type_exp env) sarg in
         let arg_type = Option.map (fun arg -> arg.exp_type) arg in
-        let set_data = mk_set_data () in
+        let set_data = mk_set_tags [l] in
         let row =
           create_row
             ~fields: [l, rf_present arg_type]

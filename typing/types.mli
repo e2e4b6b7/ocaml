@@ -299,14 +299,22 @@ val compare_type: type_expr -> type_expr -> int
 
 *)
 
-type set_data = {
-  set_id: int
-}
+type set_data
 
 val row_set_data: row_desc -> set_data
 val row_set_id: row_desc -> int
-val mk_set_data: unit -> set_data
+
+val mk_set_var: unit -> set_data
+val mk_set_tags: label list -> set_data
+val mk_set_unknown: string -> set_data
+
 val cp_set_data: row_desc -> set_data
+
+type set_variance = Left | Right | Unknown
+
+(* First is the subtype of second by default *)
+val set_constraint: string -> ?v:set_variance -> set_data -> set_data -> unit
+val set_unknown_constraint: string -> unit
 
 val create_row:
   set_data: set_data ->
