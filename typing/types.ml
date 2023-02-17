@@ -42,7 +42,11 @@ and type_desc =
   | Tpoly of type_expr * type_expr list
   | Tpackage of Path.t * (Longident.t * type_expr) list
 
-and set_data = SUnknown of string | SVar of int | STags of label list
+and set_data =
+  | SUnknown of string
+  | STags of label list
+  | SVar of int
+  | STop
 
 and set_variance = Left | Right | Unknown
 
@@ -567,6 +571,11 @@ let compare_type t1 t2 = compare (get_id t1) (get_id t2)
 
 (* Constructor and accessors for [row_desc] *)
 
+type set_solution = SSTop | SSTags of string list | SSFail
+
+let constraints = ref []
+let solution_mem = ref None
+
 let is_not_test = not @@ Sys.file_exists "/tmp/is_test"
 
 let file =
@@ -579,6 +588,7 @@ let sprint_set_data set_data = match set_data with
   | SUnknown from -> Printf.sprintf "Unknown from %s" from
   | SVar id -> Printf.sprintf "V%d" id
   | STags tags -> String.concat "" ["[";String.concat "," tags;"]"]
+  | STop -> "T"
 
 and sprint_variance v = match v with
   | Left -> "Left"
@@ -587,9 +597,14 @@ and sprint_variance v = match v with
 
 let set_constraint from ?(v = Right) s1 s2 =
   if is_not_test then () else
-  Printf.fprintf file "From: %s\nVariance: %s\n" from (sprint_variance v);
+  (Printf.fprintf file "From: %s\nVariance: %s\n" from (sprint_variance v);
   Printf.fprintf file "%s -- %s\n\n" (sprint_set_data s1) (sprint_set_data s2);
-  flush file
+  flush file;
+  solution_mem := None;
+  constraints := match v with
+  | Right -> (s1, s2) :: !constraints
+  | Left -> (s2, s1) :: !constraints
+  | Unknown -> (s1, s2) :: (s2, s1) :: !constraints)
 
 let set_unknown_constraint from =
   if is_not_test then () else
@@ -603,12 +618,21 @@ let set_id set_data = match set_data with
   | _ -> -1
 let row_set_id row = set_id row.set_data
 
+let mk_set_top () =
+  if is_not_test then SUnknown "Not in test" else
+  STop
 let mk_set_unknown from =
   if is_not_test then SUnknown "Not in test" else
   SUnknown from
 let mk_set_var () =
   if is_not_test then SUnknown "Not in test" else
   SVar (new_id ())
+let mk_set_var_tags from tags =
+  if is_not_test then SUnknown "Not in test" else
+  (let var = mk_set_var () in
+  let desc = Printf.sprintf "mk_set_var_tags: %s" from in
+  set_constraint desc (STags tags) var;
+  var)
 let mk_set_tags tags =
   if is_not_test then SUnknown "Not in test" else
   STags tags
@@ -619,10 +643,168 @@ let cp_set_data row =
   if is_not_test then SUnknown "Not in test" else
   match row.set_data with
   | SVar id ->
-      let new_svar = mk_set_var () in
-      Printf.fprintf file "Copy %d -> %d\n" id (set_id new_svar);
-      new_svar
+      let new_id = new_id () in
+
+      let with_id sd = match sd with
+        | SVar idd -> id == idd
+        | _ -> false
+      in
+      let with_id (sd1, sd2) = with_id sd1 || with_id sd2 in
+      let cp_constraints = List.filter with_id !constraints in
+      let replace_id sd = match sd with
+        | SVar idd as v -> if id == idd then SVar new_id else v
+        | sd -> sd
+      in
+      let replace_id (sd1, sd2) = (replace_id sd1, replace_id sd2) in
+      let cp_constraints = List.map replace_id cp_constraints in
+      constraints := List.append cp_constraints !constraints;
+
+      SVar new_id
   | _ as sd -> sd
+
+let sprint_tags tags = String.concat "" ["[";String.concat "," tags;"]"]
+
+let solve_for id merge edges_var edges_tag =
+  let used = Hashtbl.create 17 in
+  let rec solve_for_aux id =
+    Hashtbl.add used id ();
+    let v = Hashtbl.find edges_var id in
+    let sub_vars = List.filter (fun id -> not @@ Hashtbl.mem used id) !v in
+    let t = Hashtbl.find edges_tag id in
+    let t = !t in
+    let t = if t = [] then None else Some t in
+    let tags = t :: List.map solve_for_aux sub_vars in
+    let tags = List.fold_left merge None tags in
+    Option.map (List.sort_uniq String.compare) tags in
+  solve_for_aux id
+
+let intersect_lists l1 l2 = List.filter (fun x -> List.mem x l1) l2
+
+let solve_set_type edges_var_ub edges_tag_ub edges_var_lb edges_tag_lb id =
+  let sprint_bound b = match b with
+  | Some t -> sprint_tags t
+  | None -> "-" in
+
+  let opt_merge a b =
+    match a, b with
+    | None, None -> None
+    | Some t, None | None, Some t -> Some t
+    | Some t1, Some t2 -> Some (List.append t1 t2)
+  in
+  let opt_intersect a b =
+    match a, b with
+    | None, None ->
+        None
+    | Some t, None | None, Some t ->
+        Some t
+    | Some t1, Some t2 ->
+        Some (intersect_lists t1 t2)
+  in
+
+  let ub = solve_for id opt_intersect edges_var_ub edges_tag_ub in
+  let lb = solve_for id opt_merge edges_var_lb edges_tag_lb in
+  Printf.printf "%d: ub: %s | lb: %s\n" id (sprint_bound ub) (sprint_bound lb);
+  match ub, lb with
+  | Some ub_tags, Some lb_tags ->
+          let satisfies =
+            List.for_all
+            (fun id -> List.mem id ub_tags)
+            lb_tags
+          in
+          if satisfies then SSTags ub_tags else SSFail
+  | Some ub_tags, None -> SSTags ub_tags
+  | None, Some lb_tags -> SSTags lb_tags
+  | None, None -> SSTop
+
+let solve_constraints_ () =
+  let constraints = !constraints in
+  let app s l =
+    match s with
+    | SVar id -> id :: l
+    | _ -> l
+  in
+  let used_ids =
+    List.fold_left
+      (fun l (s1, s2) -> app s1 @@ app s2 l)
+      []
+      constraints
+  in
+  let used_ids = List.sort_uniq Int.compare used_ids in
+
+  let edges_var_ub = Hashtbl.create 13 in
+  let edges_tag_ub = Hashtbl.create 13 in
+  let edges_var_lb = Hashtbl.create 13 in
+  let edges_tag_lb = Hashtbl.create 13 in
+  List.iter
+    (fun id ->
+      Hashtbl.add edges_var_ub id (ref []);
+      Hashtbl.add edges_var_lb id (ref []);
+      Hashtbl.add edges_tag_lb id (ref []))
+    used_ids;
+  List.iter
+    (fun (sd1, sd2) ->
+      (match sd1, sd2 with
+      | STop, _ | _, STop ->
+          Printf.printf "STop in constrint\n"
+      | SUnknown _, _ | _, SUnknown _ ->
+          Printf.printf "SUnknown in constrint\n"
+      | _ -> ());
+
+      (match sd2 with
+      | SVar id2 ->
+          (match sd1 with
+          | STags tags ->
+              let t = Hashtbl.find edges_tag_lb id2 in
+              t := List.append tags !t
+          | SVar id1 ->
+              let v = Hashtbl.find edges_var_lb id2 in
+              v := id1 :: !v
+          | _ -> ())
+      | _ -> ());
+
+      (match sd1 with
+      | SVar id1 ->
+          (match sd2 with
+          | STags tags ->
+              let t = Hashtbl.find_opt edges_tag_ub id1 in
+              (match t with
+              | Some t -> t := intersect_lists tags !t
+              | None -> Hashtbl.add edges_tag_ub id1 (ref tags))
+          | SVar id2 ->
+              let v = Hashtbl.find edges_var_ub id1 in
+              v := id2 :: !v
+          | _ -> ())
+      |  _ -> ()))
+    constraints;
+  List.iter
+    (fun id ->
+      match Hashtbl.find_opt edges_tag_ub id with
+      | Some _ -> ()
+      | None -> Hashtbl.add edges_tag_ub id (ref []))
+    used_ids;
+
+  let solve_set_type =
+    solve_set_type edges_var_ub edges_tag_ub edges_var_lb edges_tag_lb in
+  let solution = List.map (fun id -> (id, solve_set_type id)) used_ids in
+  solution_mem := Some solution;
+  solution
+let solve_constraints () = match !solution_mem with
+  | None -> solve_constraints_ ()
+  | Some solution -> solution
+
+let sprint_set_type data =
+  match data with
+  | STags tags -> sprint_tags tags
+  | SVar id ->
+      let solution = solve_constraints () in
+      let solution = List.assoc_opt id solution in
+      (match solution with
+      | Some SSTop -> "T"
+      | Some SSTags tags -> sprint_tags tags
+      | Some SSFail -> "Fail"
+      | None -> "Not found")
+  | SUnknown from -> Printf.sprintf "Unknown from %s" from
+  | STop -> "T"
 
 let create_row ~set_data ~fields ~more ~closed ~fixed ~name =
     { row_fields=fields; row_more=more;
@@ -780,10 +962,7 @@ let last_snapshot = Local_store.s_ref 0
 
 let log_type ty =
   if ty.id <= !last_snapshot then log_change (Ctype (ty, ty.desc))
-let link_type ty ty' =
-  let ty = repr ty in
-  let ty' = repr ty' in
-  if ty == ty' then () else begin
+let link_type_ ty ty' =
   log_type ty;
   let desc = ty.desc in
   Transient_expr.set_desc ty (Tlink ty');
@@ -800,9 +979,18 @@ let link_type ty ty' =
       | None, None   -> ()
       end
   | _ -> ()
-  end
   (* ; assert (check_memorized_abbrevs ()) *)
   (*  ; check_expans [] ty' *)
+
+(* let link_type_variants ty ty' = () *) (* romanv: fix linking (maybe in call places, not here) *)
+
+let link_type ty ty' =
+  let ty = repr ty in
+  let ty' = repr ty' in
+  if ty == ty' then () else
+  match ty.desc, ty'.desc with
+  | Tvariant _ , _ | _, Tvariant _ -> link_type_ ty ty'
+  | _ -> link_type_ ty ty'
 (* TODO: consider eliminating set_type_desc, replacing it with link types *)
 let set_type_desc ty td =
   let ty = repr ty in

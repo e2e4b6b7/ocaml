@@ -300,7 +300,7 @@ and print_simple_out_type ppf =
       fprintf ppf "@[<2>< %a >@]" (print_fields rest) fields
   | Otyp_stuff s -> pp_print_string ppf s
   | Otyp_var (ng, s) -> pr_var ppf (if ng then "_" ^ s else s)
-  | Otyp_variant (set_id, non_gen, row_fields, closed, tags) ->
+  | Otyp_variant (set_type, non_gen, row_fields, closed, tags) ->
       let print_present ppf =
         function
           None | Some [] -> ()
@@ -314,8 +314,8 @@ and print_simple_out_type ppf =
         | Ovar_typ typ ->
            print_simple_out_type ppf typ
       in
-      fprintf ppf "!%d! %s@[<hov>[%s@[<hv>@[<hv>%a@]%a@]@ ]@]"
-        set_id
+      fprintf ppf "!%s! %s@[<hov>[%s@[<hv>@[<hv>%a@]%a@]@ ]@]"
+        set_type
         (if non_gen then "_" else "")
         (if closed then if tags = None then " " else "< "
          else if tags = None then "> " else "? ")

@@ -733,7 +733,6 @@ let close_variant env row =
     let more' = if static then Btype.newgenty Tnil else Btype.newgenvar () in
     (* this unification cannot fail *)
     let set_data = mk_set_unknown "close_variant" in
-    set_unknown_constraint "close_variant";
     Ctype.unify env more
       (Btype.newgenty
          (Tvariant
@@ -1442,7 +1441,21 @@ let rec pressure_variants tdefs = function
                   let row = type_row () in
                   if Btype.has_fixed_explanation row
                   || pressure_variants None default then ()
-                  else close_variant env row
+                  else begin
+                    close_variant env row;
+                    let fields =
+                      List.map
+                        (fun (d, _) ->
+                          match d.pat_desc with
+                          | Patterns.Head.Variant { tag } -> tag
+                          | _ -> assert false)
+                        constrs
+                    in (* romanv: here creates constraint for closed matching *)
+                    set_constraint
+                      "pressure_variants"
+                      (row_set_data row)
+                      (mk_set_tags fields)
+                  end
                 | _ -> ()
               end;
               ok

@@ -2,13 +2,15 @@
 
 rm -f dump.txt
 
-make ocamlc.opt || exit
-make ocamlopt.opt || exit
+make -j 7 ocamlc.opt || exit
+make -j 7 ocamlopt.opt || exit
 
 rm -f dump.txt
 rm -f testsuite/_ocamltest/tests/typing-misc/polyvars/dump.txt
 
 cd testsuite
+
+make one TEST=tests/typing-misc/polyvars.ml > /dev/null
 
 touch /tmp/is_test
 

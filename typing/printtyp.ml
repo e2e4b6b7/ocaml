@@ -1030,6 +1030,7 @@ let rec mark_loops_rec visited ty =
     match tty.desc with
     | Tvariant _ | Tobject _ ->
         if List.memq px !visited_objects then add_alias_proxy px else begin
+          (* romanv: proxy (`as` type in output) creates here ^ *)
           if should_visit_object ty then
             visited_objects := px :: !visited_objects;
           printer_iter_type_expr (mark_loops_rec visited) ty
@@ -1134,7 +1135,7 @@ let rec tree_of_typexp mode ty =
               let non_gen = is_non_gen mode (Transient_expr.type_expr px) in
               let tags =
                 if all_present then None else Some (List.map fst present) in
-              Otyp_variant (row_set_id row, non_gen, Ovar_typ out_variant, closed, tags)
+              Otyp_variant (sprint_set_type @@ row_set_data row, non_gen, Ovar_typ out_variant, closed, tags)
         | _ ->
             let non_gen =
               not (closed && all_present) &&
@@ -1142,7 +1143,7 @@ let rec tree_of_typexp mode ty =
             let fields = List.map (tree_of_row_field mode) fields in
             let tags =
               if all_present then None else Some (List.map fst present) in
-            Otyp_variant (row_set_id row, non_gen, Ovar_fields fields, closed, tags)
+            Otyp_variant (sprint_set_type @@ row_set_data row, non_gen, Ovar_fields fields, closed, tags)
         end
     | Tobject (fi, nm) ->
         tree_of_typobject mode fi !nm

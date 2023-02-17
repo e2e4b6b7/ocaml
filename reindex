@@ -1,0 +1,6 @@
+#!/bin/bash
+
+make clean > /dev/null || exit
+dune build @libs || exit
+
+make -j 7

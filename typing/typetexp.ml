@@ -388,7 +388,7 @@ and transl_type_aux env policy styp =
       let name = ref None in
       let mkfield l f =
         let fields = [l,f] in
-        let set_data = mk_set_tags [l] in
+        let set_data = mk_set_var_tags "transl_type_aux" [l] in
         newty (Tvariant (create_row ~fields ~more:(newvar())
                            ~closed:true ~fixed:None ~name:None
                            ~set_data)) in

@@ -366,7 +366,7 @@ let unify_pat_types_return_equated_pairs ?(refine = None) loc env ty ty' =
         unify_gadt ~equations_level:(get_gadt_equations_level ())
           ~allow_recursive env ty ty'
     | None ->
-        unify ~v:Right !env ty ty';
+        unify ~v:Soft !env ty ty';
         nothing_equated
   with
   | Unify err ->
@@ -566,7 +566,7 @@ and build_as_type_aux ~refine (env : Env.t ref) p =
   | Tpat_variant(l, p', _) ->
       let ty = Option.map (build_as_type env) p' in
       let fields = [l, rf_present ty] in
-      let set_data = mk_set_tags [l] in
+      let set_data = mk_set_var_tags "build_as_type_aux" [l] in
       newty (Tvariant (create_row ~fields ~more:(newvar())
                          ~name:None ~fixed:None ~closed:false
                          ~set_data))
@@ -791,9 +791,7 @@ let solve_Ppat_variant ~refine loc env tag no_arg expected_ty =
   let arg_type = if no_arg then [] else [newgenvar()] in
   let fields = [tag, rf_either ~no_arg arg_type ~matched:true] in
   let make_row more =
-    let tags_data = mk_set_tags [tag] in
-    let set_data = mk_set_var () in
-    set_constraint "solve_Ppat_variant" tags_data set_data;
+    let set_data = mk_set_var_tags "solve_Ppat_variant" [tag] in
     create_row ~fields ~closed:false ~more ~fixed:None ~name:None ~set_data
   in
   let row = make_row (newgenvar ()) in
@@ -3124,7 +3122,7 @@ and type_expect_
       with Exit ->
         let arg = Option.map (type_exp env) sarg in
         let arg_type = Option.map (fun arg -> arg.exp_type) arg in
-        let set_data = mk_set_tags [l] in
+        let set_data = mk_set_var_tags "type_expect_" [l] in
         let row =
           create_row
             ~fields: [l, rf_present arg_type]

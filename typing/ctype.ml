@@ -1114,8 +1114,10 @@ let rec copy ?partial ?keep_names scope ty =
                     && not (List.for_all not_reither fields) then
                       (more',
                       let set_data = cp_set_data row in
-                      create_row ~set_data ~fields:(List.filter not_reither fields)
-                         ~more:more' ~closed:false ~fixed:None ~name:None)
+                      (* romanv: here it opens when there is the wildcard pattern*)
+                      create_row ~fields:(List.filter not_reither fields)
+                                 ~set_data ~more:more' ~closed:false
+                                 ~fixed:None ~name:None)
                     else (more', row)
                 | _ -> (more', row)
               in
@@ -2605,12 +2607,13 @@ let unify3_var env t1' t2 t2' =
 *)
 
 (* Left variance means that left argument should became a supertype of right *)
-type u_variance = | Left | Right | Unknown
+type unify_variance = | Left | Right | Unknown | Soft
 
 let inv v = match v with
   | Left -> Right
   | Right -> Left
   | Unknown -> Unknown
+  | Soft -> Soft
 
 let u_variance = ref Unknown
 
@@ -3049,13 +3052,17 @@ and variance_coe () = match !u_variance with
   | Left -> Types.Left
   | Right -> Types.Right
   | Unknown -> Types.Unknown
+  | Soft -> Types.Unknown
 
 and unify_row env row1 row2 =
-  set_constraint
-    "unify_row"
-    ~v:(variance_coe ())
-    (row_set_data row1)
-    (row_set_data row2);
+  (match !u_variance with
+  | Soft -> ()
+  | _ ->
+      set_constraint
+        "unify_row"
+        ~v:(variance_coe ())
+        (row_set_data row1)
+        (row_set_data row2));
   unify_row_real env row1 row2
 
 and unify_row_field env fixed1 fixed2 rm1 rm2 l f1 f2 =
@@ -4679,13 +4686,7 @@ let rec build_subtype env (visited : transient_expr list)
       in
       let c = collect fields in
       let fields = List.map fst fields in
-      let set_data = mk_set_var () in
-      set_constraint "build_subtype"
-        (mk_set_tags @@ List.map fst fields)
-        set_data;
-      set_constraint "build_subtype2"
-        set_data
-        (row_set_data row);
+      let set_data = mk_set_unknown "build_subtype" in
       let row =
         create_row ~set_data ~fields ~more:(newvar ())
           ~closed:posi ~fixed:None
