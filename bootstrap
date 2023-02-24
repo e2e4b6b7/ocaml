@@ -1,0 +1,9 @@
+#!/bin/bash
+# romanv automation script
+
+
+make partialclean -j 7 || exit
+./repair
+make coldstart -j 7 || exit
+make coreall -j 7 || exit
+make bootstrap -j 7

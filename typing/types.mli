@@ -322,27 +322,24 @@ val sprint_set_type: set_data -> string
 
 val create_row:
   set_data: set_data ->
-  fields:(label * row_field) list ->
-  more:type_expr ->
-  closed:bool ->
+  fields:(label * type_expr option) list ->
   fixed:fixed_explanation option ->
   name:(Path.t * type_expr list) option -> row_desc
 
-val row_fields: row_desc -> (label * row_field) list
-val row_more: row_desc -> type_expr
-val row_closed: row_desc -> bool
+val row_fields: row_desc -> (label * type_expr option) list
+val row_fields_lb: row_desc -> (label * type_expr option) list
 val row_fixed: row_desc -> fixed_explanation option
 val row_name: row_desc -> (Path.t * type_expr list) option
+val row_closed: row_desc -> bool
 
 val set_row_name: row_desc -> (Path.t * type_expr list) option -> row_desc
+val set_row_fields: row_desc -> (label * type_expr option) list -> unit
 
-val get_row_field: label -> row_desc -> row_field
+val get_row_field: label -> row_desc -> type_expr option option
 
 (** get all fields at once; different from the old [row_repr] *)
 type row_desc_repr =
-    Row of { fields: (label * row_field) list;
-             more:   type_expr;
-             closed: bool;
+    Row of { fields: (label * type_expr option) list;
              fixed:  fixed_explanation option;
              name:   (Path.t * type_expr list) option }
 

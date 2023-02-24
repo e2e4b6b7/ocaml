@@ -529,15 +529,13 @@ and raw_type_desc ppf = function
         raw_type t
         raw_type_list tl
   | Tvariant row ->
-      let Row {fields; more; name; fixed; closed} = row_repr row in
+      let Row {fields; name; fixed} = row_repr row in
       fprintf ppf
-        "@[<hov1>{@[%s@,%a;@]@ @[%s@,%a;@]@ %s%B;@ %s%a;@ @[<1>%s%t@]}@]"
+        "@[<hov1>{@[%s@,%a;@]@ %s%a;@ @[<1>%s%t@]}@]"
         "row_fields="
         (raw_list (fun ppf (l, f) ->
           fprintf ppf "@[%s,@ %a@]" l raw_field f))
         fields
-        "row_more=" raw_type more
-        "row_closed=" closed
         "row_fixed=" raw_row_fixed fixed
         "row_name="
         (fun ppf ->
@@ -554,21 +552,11 @@ and raw_row_fixed ppf = function
 | Some Types.Univar t -> fprintf ppf "Some(Univar(%a))" raw_type t
 | Some Types.Reified p -> fprintf ppf "Some(Reified(%a))" path p
 
-and raw_field ppf rf =
-  match_row_field
-    ~absent:(fun _ -> fprintf ppf "RFabsent")
-    ~present:(function
-      | None ->
-          fprintf ppf "RFpresent None"
-      | Some t ->
-          fprintf ppf  "@[<1>RFpresent(Some@,%a)@]" raw_type t)
-    ~either:(fun c tl m e ->
-      fprintf ppf "@[<hov1>RFeither(%B,@,%a,@,%B,@,@[<1>ref%t@])@]" c
-        raw_type_list tl m
-        (fun ppf ->
-          match e with None -> fprintf ppf " RFnone"
-          | Some f -> fprintf ppf "@,@[<1>(%a)@]" raw_field f))
-    rf
+and raw_field ppf = function
+  | None ->
+      fprintf ppf "RFpresent None"
+  | Some t ->
+      fprintf ppf "@[<1>RFpresent(Some@,%a)@]" raw_type t
 
 let raw_type_expr ppf t =
   visited := []; kind_vars := []; kind_count := 0;
@@ -780,14 +768,7 @@ let is_non_gen mode ty =
   | Type        -> false
 
 let nameable_row row =
-  row_name row <> None &&
-  List.for_all
-    (fun (_, f) ->
-       match row_field_repr f with
-       | Reither(c, l, _) ->
-           row_closed row && if c then l = [] else List.length l = 1
-       | _ -> true)
-    (row_fields row)
+  row_name row <> None
 
 (* This specialized version of [Btype.iter_type_expr] normalizes and
    short-circuits the traversal of the [type_expr], so that it covers only the
@@ -1108,19 +1089,8 @@ let rec tree_of_typexp mode ty =
         then tree_of_typexp mode (List.hd tyl')
         else Otyp_constr (tree_of_path Type p', tree_of_typlist mode tyl')
     | Tvariant row ->
-        let Row {fields; name; closed} = row_repr row in
-        let fields =
-          if closed then
-            List.filter (fun (_, f) -> row_field_repr f <> Rabsent)
-              fields
-          else fields in
-        let present =
-          List.filter
-            (fun (_, f) ->
-               match row_field_repr f with
-               | Rpresent _ -> true
-               | _ -> false)
-            fields in
+        let Row {fields; name} = row_repr row in
+        let present = fields in
         let all_present = List.length present = List.length fields in
         begin match name with
         | Some(p, tyl) when nameable_row row ->
@@ -1129,21 +1099,21 @@ let rec tree_of_typexp mode ty =
             let args = tree_of_typlist mode (apply_subst s tyl) in
             let out_variant =
               if is_nth s then List.hd args else Otyp_constr (id, args) in
-            if closed && all_present then
+            if all_present then
               out_variant
             else
               let non_gen = is_non_gen mode (Transient_expr.type_expr px) in
               let tags =
                 if all_present then None else Some (List.map fst present) in
-              Otyp_variant (sprint_set_type @@ row_set_data row, non_gen, Ovar_typ out_variant, closed, tags)
+              Otyp_variant (sprint_set_type @@ row_set_data row, non_gen, Ovar_typ out_variant, true, tags)
         | _ ->
             let non_gen =
-              not (closed && all_present) &&
+              not (all_present) &&
               is_non_gen mode (Transient_expr.type_expr px) in
             let fields = List.map (tree_of_row_field mode) fields in
             let tags =
               if all_present then None else Some (List.map fst present) in
-            Otyp_variant (sprint_set_type @@ row_set_data row, non_gen, Ovar_fields fields, closed, tags)
+            Otyp_variant (sprint_set_type @@ row_set_data row, non_gen, Ovar_fields fields, true, tags)
         end
     | Tobject (fi, nm) ->
         tree_of_typobject mode fi !nm
@@ -1189,15 +1159,10 @@ let rec tree_of_typexp mode ty =
     Otyp_alias (pr_typ (), Names.name_of_type Names.new_name px) end
   else pr_typ ()
 
-and tree_of_row_field mode (l, f) =
-  match row_field_repr f with
-  | Rpresent None | Reither(true, [], _) -> (l, false, [])
-  | Rpresent(Some ty) -> (l, false, [tree_of_typexp mode ty])
-  | Reither(c, tyl, _) ->
-      if c (* contradiction: constant constructor with an argument *)
-      then (l, true, tree_of_typlist mode tyl)
-      else (l, false, tree_of_typlist mode tyl)
-  | Rabsent -> (l, false, [] (* actually, an error *))
+and tree_of_row_field mode (l, oty) =
+  match oty with
+  | None -> (l, false, [])
+  | Some ty -> (l, false, [tree_of_typexp mode ty])
 
 and tree_of_typlist mode tyl =
   List.map (tree_of_typexp mode) tyl
@@ -2122,13 +2087,12 @@ let type_path_list =
 let hide_variant_name t =
   match get_desc t with
   | Tvariant row ->
-      let Row {fields; more; name; fixed; closed} = row_repr row in
+      let Row {fields; name; fixed} = row_repr row in
       if name = None then t else
       let set_data = cp_set_data row in
       newty2 ~level:(get_level t)
         (Tvariant
-           (create_row ~fields ~fixed ~closed ~name:None
-              ~more:(newvar2 (get_level more))
+           (create_row ~fields ~fixed ~name:None
               ~set_data))
   | _ -> t
 

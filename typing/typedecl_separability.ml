@@ -167,21 +167,12 @@ and immediate_subtypes_variant_row acc desc =
     let add_subtype acc (_l, rf) =
       immediate_subtypes_variant_row_field acc rf in
     List.fold_left add_subtype acc (row_fields desc) in
-  let add_row acc =
-    let row = row_more desc in
-    match get_desc row with
-    | Tvariant more -> immediate_subtypes_variant_row acc more
-    | _ -> row :: acc
-  in
-  add_row (add_subtypes acc)
+  add_subtypes acc
 
-and immediate_subtypes_variant_row_field acc f =
-  match row_field_repr f with
-  | Rpresent(None)
-  | Rabsent            -> acc
-  | Rpresent(Some(ty)) -> ty :: acc
-  | Reither(_,field_types,_) ->
-      List.rev_append field_types acc
+and immediate_subtypes_variant_row_field acc oty =
+  match oty with
+  | Some ty -> ty :: acc
+  | None -> acc
 
 let free_variables ty =
   Ctype.free_variables ty

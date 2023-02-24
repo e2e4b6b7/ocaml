@@ -1,0 +1,7 @@
+#!/bin/bash
+# romanv automation script
+
+shopt -s globstar
+
+rm -rf .idea
+rm **/dump.txt

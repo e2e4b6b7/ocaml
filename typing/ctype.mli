@@ -100,11 +100,13 @@ val set_object_name:
 val remove_object_name: type_expr -> unit
 val find_cltype_for_path: Env.t -> Path.t -> type_declaration * type_expr
 
-val sort_row_fields: (label * row_field) list -> (label * row_field) list
+val sort_row_fields: (label * type_expr option) list -> (label * type_expr option) list
 val merge_row_fields:
-        (label * row_field) list -> (label * row_field) list ->
-        (label * row_field) list * (label * row_field) list *
-        (label * row_field * row_field) list
+        (label * type_expr option) list ->
+        (label * type_expr option) list ->
+        (label * type_expr option) list *
+        (label * type_expr option) list *
+        (label * type_expr option * type_expr option) list
 val filter_row_fields:
         bool -> (label * row_field) list -> (label * row_field) list
 

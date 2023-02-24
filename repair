@@ -1,0 +1,4 @@
+#!/bin/bash
+# romanv automation script
+
+git checkout 4.14 -- boot/ocamlc boot/ocamllex

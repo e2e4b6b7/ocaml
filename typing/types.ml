@@ -51,9 +51,7 @@ and set_data =
 and set_variance = Left | Right | Unknown
 
 and row_desc =
-    { row_fields: (label * row_field) list;
-      row_more: type_expr;
-      row_closed: bool;
+    { mutable row_fields: (label * type_expr option) list;
       row_fixed: fixed_explanation option;
       row_name: (Path.t * type_expr list) option;
       set_data: set_data }
@@ -574,9 +572,9 @@ let compare_type t1 t2 = compare (get_id t1) (get_id t2)
 type set_solution = SSTop | SSTags of string list | SSFail
 
 let constraints = ref []
-let solution_mem = ref None
+let edges_cache = ref None
 
-let is_not_test = not @@ Sys.file_exists "/tmp/is_test"
+let is_not_test = false
 
 let file =
   if is_not_test then Stdlib.stdout else
@@ -600,7 +598,7 @@ let set_constraint from ?(v = Right) s1 s2 =
   (Printf.fprintf file "From: %s\nVariance: %s\n" from (sprint_variance v);
   Printf.fprintf file "%s -- %s\n\n" (sprint_set_data s1) (sprint_set_data s2);
   flush file;
-  solution_mem := None;
+  edges_cache := None;
   constraints := match v with
   | Right -> (s1, s2) :: !constraints
   | Left -> (s2, s1) :: !constraints
@@ -622,8 +620,11 @@ let mk_set_top () =
   if is_not_test then SUnknown "Not in test" else
   STop
 let mk_set_unknown from =
-  if is_not_test then SUnknown "Not in test" else
+  if is_not_test then SUnknown "Not in test" else begin
+  Printf.fprintf file "Unknown from %s" from;
+  flush file;
   SUnknown from
+  end
 let mk_set_var () =
   if is_not_test then SUnknown "Not in test" else
   SVar (new_id ())
@@ -658,66 +659,23 @@ let cp_set_data row =
       let replace_id (sd1, sd2) = (replace_id sd1, replace_id sd2) in
       let cp_constraints = List.map replace_id cp_constraints in
       constraints := List.append cp_constraints !constraints;
+      edges_cache := None;
 
       SVar new_id
   | _ as sd -> sd
 
 let sprint_tags tags = String.concat "" ["[";String.concat "," tags;"]"]
 
-let solve_for id merge edges_var edges_tag =
-  let used = Hashtbl.create 17 in
-  let rec solve_for_aux id =
-    Hashtbl.add used id ();
-    let v = Hashtbl.find edges_var id in
-    let sub_vars = List.filter (fun id -> not @@ Hashtbl.mem used id) !v in
-    let t = Hashtbl.find edges_tag id in
-    let t = !t in
-    let t = if t = [] then None else Some t in
-    let tags = t :: List.map solve_for_aux sub_vars in
-    let tags = List.fold_left merge None tags in
-    Option.map (List.sort_uniq String.compare) tags in
-  solve_for_aux id
-
 let intersect_lists l1 l2 = List.filter (fun x -> List.mem x l1) l2
+let intersect_lists_assoc l1 l2 = List.filter (fun (x, _) -> List.mem x l1) l2
+(* romanv: checks that l1 is subset of l2 *)
+let subset_lists l1 l2 = List.for_all (fun id -> List.mem id l1) l2
 
-let solve_set_type edges_var_ub edges_tag_ub edges_var_lb edges_tag_lb id =
-  let sprint_bound b = match b with
-  | Some t -> sprint_tags t
-  | None -> "-" in
+(* romanv: Set-types-solver *)
 
-  let opt_merge a b =
-    match a, b with
-    | None, None -> None
-    | Some t, None | None, Some t -> Some t
-    | Some t1, Some t2 -> Some (List.append t1 t2)
-  in
-  let opt_intersect a b =
-    match a, b with
-    | None, None ->
-        None
-    | Some t, None | None, Some t ->
-        Some t
-    | Some t1, Some t2 ->
-        Some (intersect_lists t1 t2)
-  in
+(* edges = ((edges_var_ub, edges_tag_ub), (edges_var_lb, edges_tag_lb)) *)
 
-  let ub = solve_for id opt_intersect edges_var_ub edges_tag_ub in
-  let lb = solve_for id opt_merge edges_var_lb edges_tag_lb in
-  Printf.printf "%d: ub: %s | lb: %s\n" id (sprint_bound ub) (sprint_bound lb);
-  match ub, lb with
-  | Some ub_tags, Some lb_tags ->
-          let satisfies =
-            List.for_all
-            (fun id -> List.mem id ub_tags)
-            lb_tags
-          in
-          if satisfies then SSTags ub_tags else SSFail
-  | Some ub_tags, None -> SSTags ub_tags
-  | None, Some lb_tags -> SSTags lb_tags
-  | None, None -> SSTop
-
-let solve_constraints_ () =
-  let constraints = !constraints in
+let used_ids constraints =
   let app s l =
     match s with
     | SVar id -> id :: l
@@ -729,7 +687,11 @@ let solve_constraints_ () =
       []
       constraints
   in
-  let used_ids = List.sort_uniq Int.compare used_ids in
+  List.sort_uniq Int.compare used_ids
+
+let collect_edges_ () =
+  let constraints = !constraints in
+  let used_ids = used_ids constraints in
 
   let edges_var_ub = Hashtbl.create 13 in
   let edges_tag_ub = Hashtbl.create 13 in
@@ -746,8 +708,8 @@ let solve_constraints_ () =
       (match sd1, sd2 with
       | STop, _ | _, STop ->
           Printf.printf "STop in constrint\n"
-      | SUnknown _, _ | _, SUnknown _ ->
-          Printf.printf "SUnknown in constrint\n"
+      (* | SUnknown _, _ | _, SUnknown _ ->
+          Printf.printf "SUnknown in constrint\n" *)
       | _ -> ());
 
       (match sd2 with
@@ -782,62 +744,145 @@ let solve_constraints_ () =
       | Some _ -> ()
       | None -> Hashtbl.add edges_tag_ub id (ref []))
     used_ids;
+  used_ids, ((edges_var_ub, edges_tag_ub), (edges_var_lb, edges_tag_lb))
 
-  let solve_set_type =
-    solve_set_type edges_var_ub edges_tag_ub edges_var_lb edges_tag_lb in
-  let solution = List.map (fun id -> (id, solve_set_type id)) used_ids in
-  solution_mem := Some solution;
-  solution
-let solve_constraints () = match !solution_mem with
-  | None -> solve_constraints_ ()
-  | Some solution -> solution
+let collect_edges () =
+  let (_, edges) = collect_edges_ () in
+  edges_cache := Some edges; edges
+
+let id_used id =
+  let used_ids = used_ids !constraints in
+  List.mem id used_ids
+
+let solve_for merge (edges_var, edges_tag) id =
+  let used = Hashtbl.create 17 in
+  let rec solve_for_aux id =
+    Hashtbl.add used id ();
+    let v = Hashtbl.find edges_var id in
+    let sub_vars = List.filter (fun id -> not @@ Hashtbl.mem used id) !v in
+    let t = Hashtbl.find edges_tag id in
+    let t = !t in
+    let t = if t = [] then None else Some t in
+    let tags = t :: List.map solve_for_aux sub_vars in
+    let tags = List.fold_left merge None tags in
+    Option.map (List.sort_uniq String.compare) tags in
+  solve_for_aux id
+
+let solve_ub edges_ub id =
+  let opt_intersect a b =
+    match a, b with
+    | None, None -> None
+    | Some t, None | None, Some t -> Some t
+    | Some t1, Some t2 -> Some (intersect_lists t1 t2)
+  in
+  solve_for opt_intersect edges_ub id
+
+let solve_lb edges_lb id =
+  let opt_merge a b =
+    match a, b with
+    | None, None -> None
+    | Some t, None | None, Some t -> Some t
+    | Some t1, Some t2 -> Some (List.append t1 t2)
+  in
+  solve_for opt_merge edges_lb id
+
+let log_bounds ub lb id =
+  let sprint_bound b = match b with
+  | Some t -> sprint_tags t
+  | None -> "-" in
+  Printf.printf "%d: ub: %s | lb: %s\n" id (sprint_bound ub) (sprint_bound lb)
+
+let solve_set_type (edges_ub, edges_lb) id =
+  assert (id_used id);
+  let ub = solve_ub edges_ub id in
+  let lb = solve_lb edges_lb id in
+
+  log_bounds ub lb id;
+
+  match ub, lb with
+  | Some ub_tags, Some lb_tags ->
+          if subset_lists lb_tags ub_tags
+            then SSTags ub_tags
+            else SSFail
+  | Some ub_tags, None -> SSTags ub_tags
+  | None, Some lb_tags -> SSTags lb_tags
+  | None, None -> SSTop
+
+let solve_constraints id =
+  let edges = collect_edges () in
+  solve_set_type edges id
 
 let sprint_set_type data =
   match data with
   | STags tags -> sprint_tags tags
   | SVar id ->
-      let solution = solve_constraints () in
-      let solution = List.assoc_opt id solution in
+      let solution = solve_constraints id in
       (match solution with
-      | Some SSTop -> "T"
-      | Some SSTags tags -> sprint_tags tags
-      | Some SSFail -> "Fail"
-      | None -> "Not found")
+      | SSTop -> "T"
+      | SSTags tags -> sprint_tags tags
+      | SSFail -> "Fail")
   | SUnknown from -> Printf.sprintf "Unknown from %s" from
   | STop -> "T"
 
-let create_row ~set_data ~fields ~more ~closed ~fixed ~name =
-    { row_fields=fields; row_more=more;
-      row_closed=closed; row_fixed=fixed;
+let create_row ~set_data ~fields ~fixed ~name =
+    { row_fields=fields; row_fixed=fixed;
       row_name=name; set_data=set_data }
 
 (* [row_fields] subsumes the original [row_repr] *)
-let rec row_fields row =
-  match get_desc row.row_more with
-  | Tvariant row' ->
-      row.row_fields @ row_fields row'
-  | _ ->
-      row.row_fields
+(* romanv: should filters to upper_bound *)
+let row_fields row =
+  match row.set_data with
+  | SVar id when id_used id ->
+      let (edges, _) = collect_edges () in
+      let fields = row.row_fields in
+      let ub = solve_ub edges id in
+      (match ub with
+      | Some tags -> intersect_lists_assoc tags fields
+      | None -> fields)
+  | SUnknown _ | SVar _ -> row.row_fields
+  | STags tags -> intersect_lists_assoc tags row.row_fields (* should be unreachable *)
+  | STop -> row.row_fields (* should be unreachable *)
 
-let rec row_repr_no_fields row =
-  match get_desc row.row_more with
-  | Tvariant row' -> row_repr_no_fields row'
-  | _ -> row
+let row_fields_lb row =
+  match row.set_data with
+  | SVar id ->
+      let (_, edges) = collect_edges () in
+      let fields = row.row_fields in
+      let lb = solve_lb edges id in
+      (match lb with
+      | Some tags -> intersect_lists_assoc tags fields
+      | None -> fields)
+  | SUnknown _ -> row.row_fields
+  | _ -> assert false
 
-let row_more row = (row_repr_no_fields row).row_more
-let row_closed row = (row_repr_no_fields row).row_closed
+let row_repr_no_fields row = row
+
 let row_fixed row = (row_repr_no_fields row).row_fixed
 let row_name row = (row_repr_no_fields row).row_name
 
-let rec get_row_field tag row =
+(* exception Romanv of string *)
+
+let row_closed row =
+  match row.set_data with
+  | SVar id when id_used id ->
+      let (edges, _) = collect_edges () in
+      let ub = solve_ub edges id in
+      (match ub with
+      | Some _ -> true
+      | None -> false)
+  | SUnknown _ | SVar _ -> false
+    (* raise (Romanv from) *)
+  | _ -> assert false
+
+let get_row_field tag row =
   let rec find = function
     | (tag',f) :: fields ->
-        if tag = tag' then f else find fields
-    | [] ->
-        match get_desc row.row_more with
-        | Tvariant row' -> get_row_field tag row'
-        | _ -> RFabsent
+        if tag = tag' then Some f else find fields
+    | [] -> None
   in find row.row_fields
+
+let set_row_fields row fields =
+  row.row_fields <- fields
 
 let set_row_name row row_name =
   let row_fields = row_fields row in
@@ -845,9 +890,7 @@ let set_row_name row row_name =
   {row with row_fields; row_name}
 
 type row_desc_repr =
-    Row of { fields: (label * row_field) list;
-             more:type_expr;
-             closed:bool;
+    Row of { fields: (label * type_expr option) list;
              fixed:fixed_explanation option;
              name:(Path.t * type_expr list) option }
 
@@ -855,8 +898,6 @@ let row_repr row =
   let fields = row_fields row in
   let row = row_repr_no_fields row in
   Row { fields;
-        more = row.row_more;
-        closed = row.row_closed;
         fixed = row.row_fixed;
         name = row.row_name }
 

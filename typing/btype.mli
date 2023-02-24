@@ -159,8 +159,7 @@ val copy_type_desc:
     ?keep_names:bool -> (type_expr -> type_expr) -> type_desc -> type_desc
         (* Copy on types *)
 val copy_row:
-    (type_expr -> type_expr) ->
-    bool -> row_desc -> bool -> type_expr -> row_desc
+    (type_expr -> type_expr) -> bool -> row_desc -> row_desc
 
 module For_copy : sig
 

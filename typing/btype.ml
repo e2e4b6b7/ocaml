@@ -138,16 +138,7 @@ let merge_fixed_explanation fixed1 fixed2 =
   | None, None -> None
 
 
-let fixed_explanation row =
-  match row_fixed row with
-  | Some _ as x -> x
-  | None ->
-      let ty = row_more row in
-      match get_desc ty with
-      | Tvar _ | Tnil -> None
-      | Tunivar _ -> Some (Univar ty)
-      | Tconstr (p,_,_) -> Some (Reified p)
-      | _ -> assert false
+let fixed_explanation row = row_fixed row
 
 let is_fixed row = match row_fixed row with
   | None -> false
@@ -155,11 +146,8 @@ let is_fixed row = match row_fixed row with
 
 let has_fixed_explanation row = fixed_explanation row <> None
 
-let static_row row =
-  row_closed row &&
-  List.for_all
-    (fun (_,f) -> match row_field_repr f with Reither _ -> false | _ -> true)
-    (row_fields row)
+let static_row _row = (* romanv: todo *)
+  true
 
 let hash_variant s =
   let accu = ref 0 in
@@ -173,8 +161,6 @@ let hash_variant s =
 
 let proxy ty =
   match get_desc ty with
-  | Tvariant row when not (static_row row) ->
-      row_more row
   | Tobject (ty, _) ->
       let rec proxy_obj ty =
         match get_desc ty with
@@ -195,8 +181,6 @@ let row_of_type t =
           Tfield(_,_,_,t) -> get_row t
         | _ -> t
       in get_row t
-  | Tvariant row ->
-      row_more row
   | _ ->
       t
 
@@ -238,22 +222,17 @@ let fold_row f init row =
   let result =
     List.fold_left
       (fun init (_, fi) ->
-         match row_field_repr fi with
-         | Rpresent(Some ty) -> f init ty
-         | Reither(_, tl, _) -> List.fold_left f init tl
-         | _ -> init)
+         match fi with
+         | Some ty -> f init ty
+         | None -> init)
       init
       (row_fields row)
   in
-  match get_desc (row_more row) with
-  | Tvar _ | Tunivar _ | Tsubst _ | Tconstr _ | Tnil ->
-    begin match
-      Option.map (fun (_,l) -> List.fold_left f result l) (row_name row)
-    with
-    | None -> result
-    | Some result -> result
-    end
-  | _ -> assert false
+  match
+    Option.map (fun (_,l) -> List.fold_left f result l) (row_name row)
+  with
+  | None -> result
+  | Some result -> result
 
 let iter_row f row =
   fold_row (fun () v -> f v) () row
@@ -271,8 +250,7 @@ let fold_type_expr f init ty =
       List.fold_left f result p
   | Tobject (ty, _)     -> f init ty
   | Tvariant row        ->
-      let result = fold_row f init row in
-      f result (row_more row)
+      fold_row f init row
   | Tfield (_, _, ty1, ty2) ->
       let result = f init ty1 in
       f result ty2
@@ -414,19 +392,11 @@ let type_iterators =
     it_modtype_declaration; it_module_declaration; it_extension_constructor;
     it_type_declaration; it_value_description; it_signature_item; }
 
-let copy_row f fixed row keep more =
-  let Row {fields = orig_fields; fixed = orig_fixed; closed; name = orig_name} =
+let copy_row f fixed row =
+  let Row {fields = orig_fields; fixed = orig_fixed; name = orig_name} =
     row_repr row in
   let fields = List.map
-      (fun (l, fi) -> l,
-        match row_field_repr fi with
-        | Rpresent oty -> rf_present (Option.map f oty)
-        | Reither(c, tl, m) ->
-            let use_ext_of = if keep then Some fi else None in
-            let m = if is_fixed row then fixed else m in
-            let tl = List.map f tl in
-            rf_either tl ?use_ext_of ~no_arg:c ~matched:m
-        | Rabsent -> rf_absent)
+      (fun (l, oty) -> l, Option.map f oty)
       orig_fields in
   let name =
     match orig_name with
@@ -434,7 +404,7 @@ let copy_row f fixed row keep more =
     | Some (path, tl) -> Some (path, List.map f tl) in
   let fixed = if fixed then orig_fixed else None in
   let set_data = cp_set_data row in (* romanv: issue: can't copy because of bug *)
-  create_row ~set_data ~fields ~more ~fixed ~closed ~name
+  create_row ~set_data ~fields ~fixed ~name
 
 let copy_commu c = if is_commu_ok c then commu_ok else commu_var ()
 

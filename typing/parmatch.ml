@@ -231,7 +231,7 @@ let first_column simplified_matrix =
 *)
 
 
-let is_absent tag row = row_field_repr (get_row_field tag !row) = Rabsent
+let is_absent _tag _row = false
 
 let is_absent_pat d =
   match d.pat_desc with
@@ -716,37 +716,12 @@ let mark_partial =
     | _ -> set_last zero ps
   )
 
-let close_variant env row =
-  let Row {fields; more; name=orig_name; closed; fixed} = row_repr row in
-  let name, static =
-    List.fold_left
-      (fun (nm, static) (_tag,f) ->
-        match row_field_repr f with
-        | Reither(_, _, false) ->
-            (* fixed=false means that this tag is not explicitly matched *)
-            link_row_field_ext ~inside:f rf_absent;
-            (None, static)
-        | Reither (_, _, true) -> (nm, false)
-        | Rabsent | Rpresent _ -> (nm, static))
-      (orig_name, true) fields in
-  if not closed || name != orig_name then begin
-    let more' = if static then Btype.newgenty Tnil else Btype.newgenvar () in
-    (* this unification cannot fail *)
-    let set_data = mk_set_unknown "close_variant" in
-    Ctype.unify env more
-      (Btype.newgenty
-         (Tvariant
-            (create_row ~set_data
-               ~fields:[] ~more:more'
-               ~closed:true ~name ~fixed)))
-  end
-
 (*
   Check whether the first column of env makes up a complete signature or
   not. We work on the discriminating pattern heads of each sub-matrix: they
   are not omega/Any.
 *)
-let full_match closing env =  match env with
+let full_match ?_cheat _closing env =  match env with
 | [] -> false
 | (discr, _) :: _ ->
   let open Patterns.Head in
@@ -754,8 +729,8 @@ let full_match closing env =  match env with
   | Any -> assert false
   | Construct { cstr_tag = Cstr_extension _ ; _ } -> false
   | Construct c -> List.length env = c.cstr_consts + c.cstr_nonconsts
-  | Variant { type_row; _ } ->
-      let fields =
+  | Variant { type_row; _ } -> begin (* romanv: should clear *)
+      let pat_fields =
         List.map
           (fun (d, _) ->
             match d.pat_desc with
@@ -764,22 +739,16 @@ let full_match closing env =  match env with
           env
       in
       let row = type_row () in
-      if closing && not (Btype.has_fixed_explanation row) then
-        (* closing=true, we are considering the variant as closed *)
+      if _closing then
         List.for_all
-          (fun (tag,f) ->
-            match row_field_repr f with
-              Rabsent | Reither(_, _, false) -> true
-            | Reither (_, _, true)
-                (* m=true, do not discard matched tags, rather warn *)
-            | Rpresent _ -> List.mem tag fields)
-          (row_fields row)
+          (fun (tag, _) -> List.mem tag pat_fields)
+          (row_fields_lb row)
       else
         row_closed row &&
         List.for_all
-          (fun (tag,f) ->
-            row_field_repr f = Rabsent || List.mem tag fields)
+          (fun (tag, _) -> List.mem tag pat_fields)
           (row_fields row)
+      end
   | Constant Const_char _ ->
       List.length env = 256
   | Constant _
@@ -790,7 +759,7 @@ let full_match closing env =  match env with
 
 (* Written as a non-fragile matching, PR#7451 originated from a fragile matching
    below. *)
-let should_extend ext env = match ext with
+let _should_extend ext env = match ext with
 | None -> false
 | Some ext -> begin match env with
   | [] -> assert false
@@ -913,7 +882,7 @@ let build_other_constant proj make first next p env =
 
 let some_private_tag = "<some private tag>"
 
-let build_other ext env =
+let _build_other ext env =
   match env with
   | [] -> omega
   | (d, _) :: _ ->
@@ -944,7 +913,7 @@ let build_other ext env =
                 | Variant { tag } -> tag
                 | _ -> assert false)
               env
-            in
+          in
             let make_other_pat tag const =
               let arg = if const then None else Some Patterns.omega in
               make_pat (Tpat_variant(tag, arg, cstr_row)) d.pat_type d.pat_env
@@ -952,13 +921,9 @@ let build_other ext env =
             let row = type_row () in
             begin match
               List.fold_left
-                (fun others (tag,f) ->
+                (fun others (tag,oty) ->
                   if List.mem tag tags then others else
-                  match row_field_repr f with
-                    Rabsent (* | Reither _ *) -> others
-                  (* This one is called after erasing pattern info *)
-                  | Reither (c, _, _) -> make_other_pat tag c :: others
-                  | Rpresent arg -> make_other_pat tag (arg = None) :: others)
+                  make_other_pat tag (oty = None) :: others)
                 [] (row_fields row)
             with
               [] ->
@@ -1351,11 +1316,11 @@ and specialize_and_exhaust ext pss n =
             Seq.map (set_args p) sub_witnesses
         in
         let try_omega () =
-          if full_match false constrs && not (should_extend ext constrs) then
+          if full_match ~_cheat:true false constrs && not (_should_extend ext constrs) then
             Seq.empty
           else
             let sub_witnesses = exhaust ext default (n-1) in
-            match build_other ext constrs with
+            match _build_other ext constrs with
             | exception Empty ->
                 (* cannot occur, since constructors don't make
                    a full signature *)
@@ -1435,14 +1400,13 @@ let rec pressure_variants tdefs = function
               begin match constrs, tdefs with
               | [], _
               | _, None -> ()
-              | (d, _) :: _, Some env ->
+              | (d, _) :: _, Some _ ->
                 match d.pat_desc with
                 | Variant { type_row; _ } ->
                   let row = type_row () in
                   if Btype.has_fixed_explanation row
                   || pressure_variants None default then ()
                   else begin
-                    close_variant env row;
                     let fields =
                       List.map
                         (fun (d, _) ->
@@ -2052,7 +2016,7 @@ let rec collect_paths_from_pat r p = match p.pat_desc with
       the type is extended.
 *)
 
-let do_check_fragile loc casel pss =
+let do_check_fragile _loc casel pss =
   let exts =
     List.fold_left
       (fun r c -> collect_paths_from_pat r c.c_lhs)
@@ -2061,16 +2025,16 @@ let do_check_fragile loc casel pss =
   | [] -> ()
   | _ -> match pss with
     | [] -> ()
-    | ps::_ ->
+    | _ps::_ ->
         List.iter
-          (fun ext ->
-            let witnesses = exhaust (Some ext) pss (List.length ps) in
+          (fun _ext -> ()) (* romanv: should rollback *)
+            (* let witnesses = exhaust (Some ext) pss (List.length ps) in
             match witnesses () with
             | Seq.Nil ->
                 Location.prerr_warning
                   loc
                   (Warnings.Fragile_match (Path.name ext))
-            | Seq.Cons _ -> ())
+            | Seq.Cons _ -> ()) *)
           exts
 
 (********************************)

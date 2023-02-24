@@ -694,9 +694,6 @@ let privacy_mismatch env decl1 decl2 =
           | Some ty1 -> begin
             let ty1 = Ctype.expand_head env ty1 in
             match get_desc ty1 with
-            | Tvariant row when Btype.is_constr_row ~allow_ident:true
-                                  (row_more row) ->
-                Some Private_row_type
             | Tobject (fi, _) when Btype.is_constr_row ~allow_ident:true
                                      (snd (Ctype.flatten_fields fi)) ->
                 Some Private_row_type
@@ -712,79 +709,6 @@ let privacy_mismatch env decl1 decl2 =
   | _, _ ->
       None
 
-let private_variant env row1 params1 row2 params2 =
-    let r1, r2, pairs =
-      Ctype.merge_row_fields (row_fields row1) (row_fields row2)
-    in
-    let row1_closed = row_closed row1 in
-    let row2_closed = row_closed row2 in
-    let err =
-      if row2_closed && not row1_closed then Some Only_outer_closed
-      else begin
-        match row2_closed, Ctype.filter_row_fields false r1 with
-        | true, (s, _) :: _ ->
-            Some (Missing (Second, s) : private_variant_mismatch)
-        | _, _ -> None
-      end
-    in
-    if err <> None then err else
-    let err =
-      let missing =
-        List.find_opt
-          (fun (_,f) ->
-             match row_field_repr f with
-             | Rabsent | Reither _ -> false
-             | Rpresent _ -> true)
-          r2
-      in
-      match missing with
-      | None -> None
-      | Some (s, _) -> Some (Missing (First, s) : private_variant_mismatch)
-    in
-    if err <> None then err else
-    let rec loop tl1 tl2 pairs =
-      match pairs with
-      | [] -> begin
-          match Ctype.equal env true tl1 tl2 with
-          | exception Ctype.Equality err ->
-              Some (Types err : private_variant_mismatch)
-          | () -> None
-        end
-      | (s, f1, f2) :: pairs -> begin
-          match row_field_repr f1, row_field_repr f2 with
-          | Rpresent to1, Rpresent to2 -> begin
-              match to1, to2 with
-              | Some t1, Some t2 ->
-                  loop (t1 :: tl1) (t2 :: tl2) pairs
-              | None, None ->
-                  loop tl1 tl2 pairs
-              | Some _, None | None, Some _ ->
-                  Some (Incompatible_types_for s)
-            end
-          | Rpresent to1, Reither(const2, ts2, _) -> begin
-              match to1, const2, ts2 with
-              | Some t1, false, [t2] -> loop (t1 :: tl1) (t2 :: tl2) pairs
-              | None, true, [] -> loop tl1 tl2 pairs
-              | _, _, _ -> Some (Incompatible_types_for s)
-            end
-          | Rpresent _, Rabsent ->
-              Some (Missing (Second, s) : private_variant_mismatch)
-          | Reither(const1, ts1, _), Reither(const2, ts2, _) ->
-              if const1 = const2 && List.length ts1 = List.length ts2 then
-                loop (ts1 @ tl1) (ts2 @ tl2) pairs
-              else
-                Some (Incompatible_types_for s)
-          | Reither _, Rpresent _ ->
-              Some (Presence s)
-          | Reither _, Rabsent ->
-              Some (Missing (Second, s) : private_variant_mismatch)
-          | Rabsent, (Reither _ | Rabsent) ->
-              loop tl1 tl2 pairs
-          | Rabsent, Rpresent _ ->
-              Some (Missing (First, s) : private_variant_mismatch)
-        end
-    in
-    loop params1 params2 pairs
 
 let private_object env fields1 params1 fields2 params2 =
   let pairs, _miss1, miss2 = Ctype.associate_fields fields1 fields2 in
@@ -806,13 +730,6 @@ let private_object env fields1 params1 fields2 params2 =
 let type_manifest env ty1 params1 ty2 params2 priv2 kind2 =
   let ty1' = Ctype.expand_head env ty1 and ty2' = Ctype.expand_head env ty2 in
   match get_desc ty1', get_desc ty2' with
-  | Tvariant row1, Tvariant row2
-    when is_absrow env (row_more row2) -> begin
-      assert (Ctype.is_equal env true (ty1::params1) (row_more row2::params2));
-      match private_variant env row1 params1 row2 params2 with
-      | None -> None
-      | Some err -> Some (Private_variant(ty1, ty2, err))
-    end
   | Tobject (fi1, _), Tobject (fi2, _)
     when is_absrow env (snd (Ctype.flatten_fields fi2)) -> begin
       let (fields2,rest2) = Ctype.flatten_fields fi2 in
@@ -828,8 +745,6 @@ let type_manifest env ty1 params1 ty2 params2 priv2 kind2 =
         | Private, Type_abstract -> begin
             (* Same checks as the [when] guards from above, inverted *)
             match get_desc ty2' with
-            | Tvariant row ->
-                not (is_absrow env (row_more row))
             | Tobject (fi, _) ->
                 not (is_absrow env (snd (Ctype.flatten_fields fi)))
             | _ -> true

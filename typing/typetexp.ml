@@ -321,21 +321,12 @@ and transl_type_aux env policy styp =
       let ty = Ctype.expand_head env (newconstr path ty_args) in
       let ty = match get_desc ty with
         Tvariant row ->
-          let fields =
-            List.map
-              (fun (l,f) -> l,
-                match row_field_repr f with
-                | Rpresent oty -> rf_either_of oty
-                | _ -> f)
-              (row_fields row)
-          in
+          let fields = row_fields row in
           (* NB: row is always non-static here; more is thus never Tnil *)
-          let more =
-            if policy = Univars then new_pre_univar () else newvar () in
           let set_data = cp_set_data row in
           let row =
-            create_row ~fields ~more
-              ~closed:true ~fixed:None ~name:(Some (path, ty_args))
+            create_row ~fields
+              ~fixed:None ~name:(Some (path, ty_args))
               ~set_data in
           newty (Tvariant row)
       | Tobject (fi, _) ->
@@ -388,24 +379,24 @@ and transl_type_aux env policy styp =
       let name = ref None in
       let mkfield l f =
         let fields = [l,f] in
-        let set_data = mk_set_var_tags "transl_type_aux" [l] in
-        newty (Tvariant (create_row ~fields ~more:(newvar())
-                           ~closed:true ~fixed:None ~name:None
+        let set_data = mk_set_var_tags "transl_type_aux 1" [l] in
+        newty (Tvariant (create_row ~fields
+                           ~fixed:None ~name:None
                            ~set_data)) in
       let hfields = Hashtbl.create 17 in
-      let add_typed_field loc l f =
+      let add_typed_field loc l oty =
         let h = Btype.hash_variant l in
         try
           let (l',f') = Hashtbl.find hfields h in
           (* Check for tag conflicts *)
           if l <> l' then raise(Error(styp.ptyp_loc, env, Variant_tags(l, l')));
-          let ty = mkfield l f and ty' = mkfield l f' in
+          let ty = mkfield l oty and ty' = mkfield l f' in
           if is_equal env false [ty] [ty'] then () else
           try unify env ty ty'
           with Unify _trace ->
             raise(Error(loc, env, Constructor_mismatch (ty,ty')))
         with Not_found ->
-          Hashtbl.add hfields h (l,f)
+          Hashtbl.add hfields h (l,oty)
       in
       let add_field field =
         let rf_loc = field.prf_loc in
@@ -417,19 +408,13 @@ and transl_type_aux env policy styp =
               Builtin_attributes.warning_scope rf_attributes
                 (fun () -> List.map (transl_type env policy) stl)
             in
-            let f = match present with
-              Some present when not (List.mem l.txt present) ->
-                let ty_tl = List.map (fun cty -> cty.ctyp_type) tl in
-                rf_either ty_tl ~no_arg:c ~matched:false
-            | _ ->
-                if List.length stl > 1 || c && stl <> [] then
-                  raise(Error(styp.ptyp_loc, env,
-                              Present_has_conjunction l.txt));
-                match tl with [] -> rf_present None
-                | st :: _ -> rf_present (Some st.ctyp_type)
+            let oty =
+                match tl with
+                | [] -> None
+                | st :: _ -> Some st.ctyp_type
             in
-            add_typed_field styp.ptyp_loc l.txt f;
-              Ttag (l,c,tl)
+            add_typed_field styp.ptyp_loc l.txt oty;
+            Ttag (l,c,tl)
         | Rinherit sty ->
             let cty = transl_type env policy sty in
             let ty = cty.ctyp_type in
@@ -448,16 +433,8 @@ and transl_type_aux env policy styp =
                 raise(Error(sty.ptyp_loc, env, Not_a_variant ty))
             in
             List.iter
-              (fun (l, f) ->
-                let f = match present with
-                  Some present when not (List.mem l present) ->
-                    begin match row_field_repr f with
-                      Rpresent oty -> rf_either_of oty
-                    | _ -> assert false
-                    end
-                | _ -> f
-                in
-                add_typed_field sty.ptyp_loc l f)
+              (fun (l, oty) ->
+                add_typed_field sty.ptyp_loc l oty)
               fl;
               Tinherit cty
         in
@@ -473,15 +450,15 @@ and transl_type_aux env policy styp =
             present
       end;
       let name = !name in
-      let set_data = mk_set_unknown "transl_type_aux" in
-      let make_row more =
-        create_row ~fields ~more ~closed:(closed = Closed) ~fixed:None ~name ~set_data
+      let set_tags =
+        Hashtbl.fold
+          (fun _ (l, _) a -> l :: a)
+          hfields
+          []
       in
-      let more =
-        if Btype.static_row (make_row (newvar ())) then newty Tnil else
-        if policy = Univars then new_pre_univar () else newvar ()
-      in
-      let ty = newty (Tvariant (make_row more)) in
+      let set_data = mk_set_var_tags "transl_type_aux 2" set_tags in
+      let row = create_row ~fields ~fixed:None ~name ~set_data in
+      let ty = newty (Tvariant row) in
       ctyp (Ttyp_variant (tfields, closed, present)) ty
   | Ptyp_poly(vars, st) ->
       let vars = List.map (fun v -> v.txt) vars in
@@ -587,30 +564,7 @@ and transl_fields env policy o fields =
 
 
 (* Make the rows "fixed" in this type, to make universal check easier *)
-let rec make_fixed_univars ty =
-  if Btype.try_mark_node ty then
-    begin match get_desc ty with
-    | Tvariant row ->
-        let Row {fields; more; name; closed} = row_repr row in
-        if Btype.is_Tunivar more then
-          let fields =
-            List.map
-              (fun (s,f as p) -> match row_field_repr f with
-                Reither (no_arg, tl, _m) ->
-                  s, rf_either tl ~use_ext_of:f ~no_arg ~matched:true
-              | _ -> p)
-              fields
-          in
-          let set_data = cp_set_data row in
-          set_type_desc ty
-            (Tvariant
-               (create_row ~fields ~more ~name ~closed
-                  ~fixed:(Some (Univar more))
-                  ~set_data));
-        Btype.iter_row make_fixed_univars row
-    | _ ->
-        Btype.iter_type_expr make_fixed_univars ty
-    end
+let make_fixed_univars _ty = ()
 
 let make_fixed_univars ty =
   make_fixed_univars ty;

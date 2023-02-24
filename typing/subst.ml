@@ -217,38 +217,12 @@ let rec typexp copy_scope s ty =
           in
           Tobject (t1', ref name')
       | Tvariant row ->
-          let more = row_more row in
-          let mored = get_desc more in
           (* We must substitute in a subtle way *)
           (* Tsubst takes a tuple containing the row var and the variant *)
-          begin match mored with
-            Tsubst (_, Some ty2) ->
-              (* This variant type has been already copied *)
-              (* Change the stub to avoid Tlink in the new type *)
-              For_copy.redirect_desc copy_scope ty (Tsubst (ty2, None));
-              Tlink ty2
-          | _ ->
-              let dup =
-                s.for_saving || get_level more = generic_level ||
-                static_row row || is_Tconstr more in
-              (* Various cases for the row variable *)
-              let more' =
-                match mored with
-                  Tsubst (ty, None) -> ty
-                | Tconstr _ | Tnil -> typexp copy_scope s more
-                | Tunivar _ | Tvar _ ->
-                    if s.for_saving then newpersty (norm mored)
-                    else if dup && is_Tvar more then newgenty mored
-                    else more
-                | _ -> assert false
-              in
-              (* Register new type first for recursion *)
-              For_copy.redirect_desc copy_scope more
-                (Tsubst (more', Some ty'));
-              (* TODO: check if more' can be eliminated *)
+          begin
               (* Return a new copy *)
               let row =
-                copy_row (typexp copy_scope s) true row (not dup) more' in
+                copy_row (typexp copy_scope s) true row in
               match row_name row with
               | Some (p, tl) ->
                   let name =
