@@ -1,0 +1,1 @@
+type tip = [`Ok | `Error]

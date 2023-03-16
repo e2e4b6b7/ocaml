@@ -318,7 +318,7 @@ type set_variance = Left | Right | Unknown
 val set_constraint: string -> ?v:set_variance -> set_data -> set_data -> unit
 val set_unknown_constraint: string -> unit
 
-val sprint_set_type: set_data -> string
+val sprint_set_type: row_desc -> string
 
 val create_row:
   set_data: set_data ->
@@ -340,6 +340,7 @@ val get_row_field: label -> row_desc -> type_expr option option
 (** get all fields at once; different from the old [row_repr] *)
 type row_desc_repr =
     Row of { fields: (label * type_expr option) list;
+             closed: bool;
              fixed:  fixed_explanation option;
              name:   (Path.t * type_expr list) option }
 

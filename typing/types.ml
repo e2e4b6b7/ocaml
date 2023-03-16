@@ -668,10 +668,8 @@ let sprint_tags tags = String.concat "" ["[";String.concat "," tags;"]"]
 
 let intersect_lists l1 l2 = List.filter (fun x -> List.mem x l1) l2
 let intersect_lists_assoc l1 l2 = List.filter (fun (x, _) -> List.mem x l1) l2
-(* romanv: checks that l1 is subset of l2 *)
-let subset_lists l1 l2 = List.for_all (fun id -> List.mem id l1) l2
-
-(* romanv: Set-types-solver *)
+(* Checks that l1 is subset of l2 *)
+let subset_lists l1 l2 = List.for_all (fun id -> List.mem id l2) l1
 
 (* edges = ((edges_var_ub, edges_tag_ub), (edges_var_lb, edges_tag_lb)) *)
 
@@ -688,6 +686,8 @@ let used_ids constraints =
       constraints
   in
   List.sort_uniq Int.compare used_ids
+
+exception Romanv of string
 
 let collect_edges_ () =
   let constraints = !constraints in
@@ -754,7 +754,9 @@ let id_used id =
   let used_ids = used_ids !constraints in
   List.mem id used_ids
 
-let solve_for merge (edges_var, edges_tag) id =
+let solve_for merge (edges_var, edges_tag) id = try
+  assert (Hashtbl.mem edges_tag id);
+  assert (Hashtbl.mem edges_var id);
   let used = Hashtbl.create 17 in
   let rec solve_for_aux id =
     Hashtbl.add used id ();
@@ -767,6 +769,7 @@ let solve_for merge (edges_var, edges_tag) id =
     let tags = List.fold_left merge None tags in
     Option.map (List.sort_uniq String.compare) tags in
   solve_for_aux id
+with Not_found -> raise (Romanv "Not found in solve_for")
 
 let solve_ub edges_ub id =
   let opt_intersect a b =
@@ -812,15 +815,19 @@ let solve_constraints id =
   let edges = collect_edges () in
   solve_set_type edges id
 
-let sprint_set_type data =
+let sprint_set_type row =
+  let data = row.set_data in
   match data with
   | STags tags -> sprint_tags tags
-  | SVar id ->
+  | SVar id when id_used id ->
       let solution = solve_constraints id in
       (match solution with
       | SSTop -> "T"
       | SSTags tags -> sprint_tags tags
       | SSFail -> "Fail")
+  | SVar _ ->
+      Printf.sprintf "Unsure: %s"
+        (sprint_tags (List.map fst row.row_fields))
   | SUnknown from -> Printf.sprintf "Unknown from %s" from
   | STop -> "T"
 
@@ -829,7 +836,6 @@ let create_row ~set_data ~fields ~fixed ~name =
       row_name=name; set_data=set_data }
 
 (* [row_fields] subsumes the original [row_repr] *)
-(* romanv: should filters to upper_bound *)
 let row_fields row =
   match row.set_data with
   | SVar id when id_used id ->
@@ -840,27 +846,25 @@ let row_fields row =
       | Some tags -> intersect_lists_assoc tags fields
       | None -> fields)
   | SUnknown _ | SVar _ -> row.row_fields
-  | STags tags -> intersect_lists_assoc tags row.row_fields (* should be unreachable *)
-  | STop -> row.row_fields (* should be unreachable *)
+  | STags tags -> intersect_lists_assoc tags row.row_fields
+  | STop -> row.row_fields
 
 let row_fields_lb row =
   match row.set_data with
-  | SVar id ->
+  | SVar id when id_used id ->
       let (_, edges) = collect_edges () in
       let fields = row.row_fields in
       let lb = solve_lb edges id in
       (match lb with
       | Some tags -> intersect_lists_assoc tags fields
       | None -> fields)
-  | SUnknown _ -> row.row_fields
+  | SUnknown _ | SVar _ -> row.row_fields
   | _ -> assert false
 
 let row_repr_no_fields row = row
 
 let row_fixed row = (row_repr_no_fields row).row_fixed
 let row_name row = (row_repr_no_fields row).row_name
-
-(* exception Romanv of string *)
 
 let row_closed row =
   match row.set_data with
@@ -871,7 +875,6 @@ let row_closed row =
       | Some _ -> true
       | None -> false)
   | SUnknown _ | SVar _ -> false
-    (* raise (Romanv from) *)
   | _ -> assert false
 
 let get_row_field tag row =
@@ -891,13 +894,16 @@ let set_row_name row row_name =
 
 type row_desc_repr =
     Row of { fields: (label * type_expr option) list;
+             closed:bool;
              fixed:fixed_explanation option;
              name:(Path.t * type_expr list) option }
 
 let row_repr row =
   let fields = row_fields row in
   let row = row_repr_no_fields row in
+  let closed = row_closed row in
   Row { fields;
+        closed;
         fixed = row.row_fixed;
         name = row.row_name }
 
@@ -1023,14 +1029,21 @@ let link_type_ ty ty' =
   (* ; assert (check_memorized_abbrevs ()) *)
   (*  ; check_expans [] ty' *)
 
-(* let link_type_variants ty ty' = () *) (* romanv: fix linking (maybe in call places, not here) *)
-
 let link_type ty ty' =
   let ty = repr ty in
   let ty' = repr ty' in
   if ty == ty' then () else
   match ty.desc, ty'.desc with
-  | Tvariant _ , _ | _, Tvariant _ -> link_type_ ty ty'
+  | Tvariant _, Tvariant _
+      -> () (* romanv: To validate *)
+  | Tvar _, Tvariant _
+      -> Transient_expr.set_desc ty
+           (Tvariant
+             (create_row
+                ~set_data:(mk_set_var ())
+                ~fields:[]
+                ~fixed:None
+                ~name:None))
   | _ -> link_type_ ty ty'
 (* TODO: consider eliminating set_type_desc, replacing it with link types *)
 let set_type_desc ty td =

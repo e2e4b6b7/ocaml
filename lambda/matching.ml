@@ -2900,9 +2900,17 @@ let call_switcher_variant_constr loc fail arg int_lambda_list =
       Lprim (Pfield 0, [ arg ], loc),
       call_switcher loc fail (Lvar v) min_int max_int int_lambda_list )
 
-let combine_variant loc _row arg partial ctx def (tag_lambda_list, total1, _pats)
+let combine_variant loc row arg partial ctx def (tag_lambda_list, total1, _pats)
     =
-  let num_constr = ref max_int in (* romanv: check *)
+  let num_constr = ref 0 in
+  if row_closed row then
+    List.iter (* romanv: To fix *)
+      (fun (_, f) ->
+        match f with
+        | _ -> incr num_constr)
+      (row_fields row)
+  else
+    num_constr := max_int;
   let test_int_or_block arg if_int if_block =
     Lifthenelse (Lprim (Pisint, [ arg ], loc), if_int, if_block)
   in

@@ -146,7 +146,7 @@ let is_fixed row = match row_fixed row with
 
 let has_fixed_explanation row = fixed_explanation row <> None
 
-let static_row _row = (* romanv: todo *)
+let static_row _row = (* romanv: To validate *)
   true
 
 let hash_variant s =
@@ -403,7 +403,7 @@ let copy_row f fixed row =
     | None -> None
     | Some (path, tl) -> Some (path, List.map f tl) in
   let fixed = if fixed then orig_fixed else None in
-  let set_data = cp_set_data row in (* romanv: issue: can't copy because of bug *)
+  let set_data = cp_set_data row in
   create_row ~set_data ~fields ~fixed ~name
 
 let copy_commu c = if is_commu_ok c then commu_ok else commu_var ()

@@ -3387,7 +3387,7 @@ and type_expect_
                   let snap = snapshot () in
                   let ty, _b = enlarge_type env ty' in
                   try
-                    force (); Ctype.unify ~v:Right env arg.exp_type ty; true (* romanv: varance not sure *)
+                    force (); Ctype.unify ~v:Right env arg.exp_type ty; true (* romanv: To validate variance *)
                   with Unify _ ->
                     backtrack snap; false
                 then ()

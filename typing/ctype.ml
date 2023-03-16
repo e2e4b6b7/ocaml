@@ -3468,7 +3468,39 @@ and moregen_kind k1 k2 =
   | (Fabsent, _) | (_, Fabsent)      -> assert false
 
 and moregen_row _inst_nongen _type_pairs _env _row1 _row2 = ()
-  (* romanv: todo: moregeneral with may inst lead to new constraints *)
+  (* romanv: To check what happens with inst_nongen and levels in may_instantiate *)
+  (* romanv: To enable check *)
+  (* let Row {fields = row1_fields; closed = row1_closed} =
+    row_repr row1 in
+  let Row {fields = row2_fields; closed = row2_closed} =
+    row_repr row2 in
+  let r1, r2, pairs = merge_row_fields row1_fields row2_fields in
+  begin
+    if r1 <> [] then raise_for Moregen (Variant (No_tags (Second, r1)))
+  end;
+  if row1_closed then begin
+    match row2_closed, r2 with
+    | false, _ -> raise_for Moregen (Variant (Openness Second))
+    | _, _ :: _ -> raise_for Moregen (Variant (No_tags (First, r2)))
+    | _, [] -> ()
+  end;
+  List.iter
+    (fun (l,f1,f2) ->
+        if f1 == f2 then () else
+        match f1, f2 with
+        (* Both matching [Rpresent]s *)
+        | Some t1, Some t2 -> begin
+            try
+              moregen inst_nongen type_pairs env t1 t2
+            with Moregen_trace trace ->
+              raise_trace_for Moregen
+                (Variant (Incompatible_types_for l) :: trace)
+          end
+        | None, None -> ()
+        | Some _, None
+        | None, Some _ ->
+            raise_for Moregen (Variant (Incompatible_types_for l)))
+    pairs *)
 
 (* Must empty univar_pairs first *)
 let moregen inst_nongen type_pairs env patt subj =
@@ -4427,13 +4459,12 @@ and subtype_fields env trace ty1 ty2 cstrs =
          cstrs)
     cstrs pairs
 
-and subtype_row _env _trace _row1 _row2 _cstrs = (* romanv: should check *)
-  Printf.printf "subtype_row\n";
-  assert false(*;
+and subtype_row env trace row1 row2 cstrs =
+  Printf.eprintf "subtype_row\n";
   let row1_fields = row_fields row1 in
   let row2_fields = row_fields row2 in
   let r1, _r2, pairs = merge_row_fields row1_fields row2_fields in
-  if r1 != [] then raise Exit;
+  if r1 != [] then raise Exit else
   List.fold_left
     (fun cstrs (_, t1, t2) ->
       match t1, t2 with
@@ -4441,7 +4472,7 @@ and subtype_row _env _trace _row1 _row2 _cstrs = (* romanv: should check *)
       | None, None -> cstrs
       | _ -> raise Exit)
     cstrs
-    pairs*)
+    pairs
 
 let subtype env ty1 ty2 =
   TypePairs.clear subtypes;

@@ -1,9 +1,15 @@
 #!/bin/bash
 # romanv automation script
 
+./clean
+# git stage .
+# git commit --amend -m "Test"
 
+git checkout 4.14 ||exit
+git checkout HEAD -- boot || exit
 make partialclean -j 7 || exit
-./repair
-make coldstart -j 7 || exit
+make world.opt -j 7 || exit
+
+git checkout constraints-2 || exit
 make coreall -j 7 || exit
-make bootstrap -j 7
+make bootstrap -j 7 ||exit

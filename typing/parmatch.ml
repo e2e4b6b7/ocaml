@@ -721,7 +721,7 @@ let mark_partial =
   not. We work on the discriminating pattern heads of each sub-matrix: they
   are not omega/Any.
 *)
-let full_match ?_cheat _closing env =  match env with
+let full_match ?_cheat closing env =  match env with (* romanv: To remove cheat *)
 | [] -> false
 | (discr, _) :: _ ->
   let open Patterns.Head in
@@ -729,7 +729,7 @@ let full_match ?_cheat _closing env =  match env with
   | Any -> assert false
   | Construct { cstr_tag = Cstr_extension _ ; _ } -> false
   | Construct c -> List.length env = c.cstr_consts + c.cstr_nonconsts
-  | Variant { type_row; _ } -> begin (* romanv: should clear *)
+  | Variant { type_row; _ } -> begin
       let pat_fields =
         List.map
           (fun (d, _) ->
@@ -739,7 +739,7 @@ let full_match ?_cheat _closing env =  match env with
           env
       in
       let row = type_row () in
-      if _closing then
+      if closing then
         List.for_all
           (fun (tag, _) -> List.mem tag pat_fields)
           (row_fields_lb row)
@@ -1234,13 +1234,10 @@ let print_pat pat =
 
   This function should be called for exhaustiveness check only.
 *)
-let rec exhaust (ext:Path.t option) pss n = match pss with
-| []    ->  Seq.return (omegas n)
-| []::_ ->  Seq.empty
-| [(p :: ps)] -> exhaust_single_row ext p ps n
-| pss   -> specialize_and_exhaust ext pss n
+let rec exhaust (_ext:Path.t option) _pss _n =
+Seq.empty
 
-and exhaust_single_row ext p ps n =
+and _exhaust_single_row ext p ps n =
   (* Shortcut: in the single-row case p :: ps we know that all
      counter-examples are either of the form
        counter-example(p) :: omegas
@@ -1273,11 +1270,11 @@ and exhaust_single_row ext p ps n =
       | None ->
           (* note: calling [exhaust] recursively of p would
              result in an infinite loop in the case n=1 *)
-          let p_witnesses = specialize_and_exhaust ext [[p]] 1 in
+          let p_witnesses = _specialize_and_exhaust ext [[p]] 1 in
           Seq.map (fun p_row -> p_row @ omegas (n - 1)) p_witnesses
     )
 
-and specialize_and_exhaust ext pss n =
+and _specialize_and_exhaust ext pss n =
   let pss = simplify_first_col pss in
   if not (all_coherent (first_column pss)) then
     (* We're considering an ill-typed branch, we won't actually be able to
@@ -1414,7 +1411,7 @@ let rec pressure_variants tdefs = function
                           | Patterns.Head.Variant { tag } -> tag
                           | _ -> assert false)
                         constrs
-                    in (* romanv: here creates constraint for closed matching *)
+                    in
                     set_constraint
                       "pressure_variants"
                       (row_set_data row)
@@ -2027,7 +2024,7 @@ let do_check_fragile _loc casel pss =
     | [] -> ()
     | _ps::_ ->
         List.iter
-          (fun _ext -> ()) (* romanv: should rollback *)
+          (fun _ext -> ()) (* romanv: To return fragile check *)
             (* let witnesses = exhaust (Some ext) pss (List.length ps) in
             match witnesses () with
             | Seq.Nil ->

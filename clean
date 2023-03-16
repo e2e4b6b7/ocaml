@@ -1,7 +1,7 @@
 #!/bin/bash
 # romanv automation script
 
-shopt -s globstar
-
 rm -rf .idea
-rm **/dump.txt
+rm -f dump.txt
+rm -f */dump.txt
+rm -f */*/dump.txt
