@@ -1061,7 +1061,8 @@ end = struct
     | `From_open ->
         to_be_removed.hide <-
           Ident.Map.add id (cl, loc, From_open) to_be_removed.hide
-    | #bound_info as bound_info ->
+    | `Exported
+    | `Shadowable _ as bound_info ->
         let tbl = table_for cl t.bound in
         let name = Ident.name id in
         match Hashtbl.find_opt tbl name with

@@ -1807,7 +1807,7 @@ let divide_variant ~scopes row ctx { cases = cl; args; default = def } =
         in
         let head = Simple.head p in
         let variants = divide rem in
-        if get_row_field lab row = None then
+        if row_closed row && get_row_field ~d:true lab row = None then
           variants
         else
           let tag = Btype.hash_variant lab in

@@ -59,17 +59,13 @@ BYTECODE_SHARED_LIBRARIES :=
 NATIVE_STATIC_LIBRARIES := libasmrun.$(A)
 NATIVE_SHARED_LIBRARIES :=
 
-ifeq "$(RUNTIMED)" "true"
 PROGRAMS += ocamlrund$(EXE)
 BYTECODE_STATIC_LIBRARIES += libcamlrund.$(A)
 NATIVE_STATIC_LIBRARIES += libasmrund.$(A)
-endif
 
-ifeq "$(INSTRUMENTED_RUNTIME)" "true"
 PROGRAMS += ocamlruni$(EXE)
 BYTECODE_STATIC_LIBRARIES += libcamlruni.$(A)
 NATIVE_STATIC_LIBRARIES += libasmruni.$(A)
-endif
 
 ifeq "$(UNIX_OR_WIN32)" "unix"
 ifeq "$(SUPPORTS_SHARED_LIBRARIES)" "true"

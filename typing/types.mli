@@ -335,7 +335,7 @@ val row_closed: row_desc -> bool
 val set_row_name: row_desc -> (Path.t * type_expr list) option -> row_desc
 val set_row_fields: row_desc -> (label * type_expr option) list -> unit
 
-val get_row_field: label -> row_desc -> type_expr option option
+val get_row_field: ?d:bool -> label -> row_desc -> type_expr option option
 
 (** get all fields at once; different from the old [row_repr] *)
 type row_desc_repr =

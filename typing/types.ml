@@ -793,7 +793,7 @@ let log_bounds ub lb id =
   let sprint_bound b = match b with
   | Some t -> sprint_tags t
   | None -> "-" in
-  Printf.printf "%d: ub: %s | lb: %s\n" id (sprint_bound ub) (sprint_bound lb)
+  Printf.fprintf file "%d: ub: %s | lb: %s\n" id (sprint_bound ub) (sprint_bound lb)
 
 let solve_set_type (edges_ub, edges_lb) id =
   assert (id_used id);
@@ -877,12 +877,31 @@ let row_closed row =
   | SUnknown _ | SVar _ -> false
   | _ -> assert false
 
-let get_row_field tag row =
+let dump tag row =
+  Printf.fprintf file "get_row_field dump\n";
+  match row.row_name with
+  | Some (path, _) ->
+      Printf.fprintf file "Name: %s\n" (Path.name path)
+  | None -> ();
+  Printf.fprintf file "Tags: %s\n" (sprint_tags (List.map fst row.row_fields));
+  Printf.fprintf file "Inferred tags: %s\n" (sprint_set_type row);
+  Printf.fprintf file "Searching for tag: %s\n" tag
+
+let get_row_field_ tag row =
   let rec find = function
     | (tag',f) :: fields ->
         if tag = tag' then Some f else find fields
     | [] -> None
   in find row.row_fields
+
+let get_row_field ?d tag row =
+  match d with
+  | Some true ->
+      let a = get_row_field_ tag row in
+      if a == None then dump tag row;
+      a
+  | _ -> get_row_field_ tag row
+
 
 let set_row_fields row fields =
   row.row_fields <- fields
