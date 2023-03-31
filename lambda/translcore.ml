@@ -311,14 +311,7 @@ and transl_exp0 ~in_new_scope ~scopes e =
         (transl_apply ~scopes ~tailcall ~inlined ~specialised
            (transl_exp ~scopes funct) oargs (of_location ~scopes e.exp_loc))
   | Texp_match(arg, pat_expr_list, partial) ->
-      let l = transl_match ~scopes e arg pat_expr_list partial in
-
-      let line = arg.exp_loc.loc_start.pos_lnum in
-      if line == 1054 then
-        (Printlambda.lambda Format.std_formatter l;
-        Format.pp_print_newline Format.std_formatter ());
-
-      l
+      transl_match ~scopes e arg pat_expr_list partial
   | Texp_try(body, pat_expr_list) ->
       let id = Typecore.name_cases "exn" pat_expr_list in
       Ltrywith(transl_exp ~scopes body, id,

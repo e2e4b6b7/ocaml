@@ -1796,7 +1796,7 @@ let get_expr_args_variant_nonconst ~scopes head (arg, _mut) rem =
   let loc = head_loc ~scopes head in
   (Lprim (Pfield 1, [ arg ], loc), Alias) :: rem
 
-let divide_variant ~scopes row ctx { cases = cl; args; default = def } =
+let divide_variant ~scopes _row ctx { cases = cl; args; default = def } =
   let rec divide = function
     | [] -> { args; cells = [] }
     | ((p, patl), action) :: rem
@@ -1807,7 +1807,10 @@ let divide_variant ~scopes row ctx { cases = cl; args; default = def } =
         in
         let head = Simple.head p in
         let variants = divide rem in
-        if row_closed row && get_row_field ~d:true lab row = None then
+        (* romanv: To fix optimization *)
+        (* Removes unreachable branches *)
+        (* To check: if `row_closed row &&` helps *)
+        if false (* get_row_field ~d:true lab row = None *) then
           variants
         else
           let tag = Btype.hash_variant lab in

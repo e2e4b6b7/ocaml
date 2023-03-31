@@ -1234,10 +1234,13 @@ let print_pat pat =
 
   This function should be called for exhaustiveness check only.
 *)
-let rec exhaust (_ext:Path.t option) _pss _n =
-Seq.empty
+let rec exhaust (ext:Path.t option) pss n = match pss with
+| []    ->  Seq.return (omegas n)
+| []::_ ->  Seq.empty
+| [(p :: ps)] -> exhaust_single_row ext p ps n
+| pss   -> specialize_and_exhaust ext pss n
 
-and _exhaust_single_row ext p ps n =
+and exhaust_single_row ext p ps n =
   (* Shortcut: in the single-row case p :: ps we know that all
      counter-examples are either of the form
        counter-example(p) :: omegas
@@ -1270,11 +1273,11 @@ and _exhaust_single_row ext p ps n =
       | None ->
           (* note: calling [exhaust] recursively of p would
              result in an infinite loop in the case n=1 *)
-          let p_witnesses = _specialize_and_exhaust ext [[p]] 1 in
+          let p_witnesses = specialize_and_exhaust ext [[p]] 1 in
           Seq.map (fun p_row -> p_row @ omegas (n - 1)) p_witnesses
     )
 
-and _specialize_and_exhaust ext pss n =
+and specialize_and_exhaust ext pss n =
   let pss = simplify_first_col pss in
   if not (all_coherent (first_column pss)) then
     (* We're considering an ill-typed branch, we won't actually be able to
@@ -2013,7 +2016,7 @@ let rec collect_paths_from_pat r p = match p.pat_desc with
       the type is extended.
 *)
 
-let do_check_fragile _loc casel pss =
+let do_check_fragile loc casel pss =
   let exts =
     List.fold_left
       (fun r c -> collect_paths_from_pat r c.c_lhs)
@@ -2022,16 +2025,16 @@ let do_check_fragile _loc casel pss =
   | [] -> ()
   | _ -> match pss with
     | [] -> ()
-    | _ps::_ ->
+    | ps::_ ->
         List.iter
-          (fun _ext -> ()) (* romanv: To return fragile check *)
-            (* let witnesses = exhaust (Some ext) pss (List.length ps) in
+          (fun ext ->
+            let witnesses = exhaust (Some ext) pss (List.length ps) in
             match witnesses () with
             | Seq.Nil ->
                 Location.prerr_warning
                   loc
                   (Warnings.Fragile_match (Path.name ext))
-            | Seq.Cons _ -> ()) *)
+            | Seq.Cons _ -> ())
           exts
 
 (********************************)

@@ -914,6 +914,7 @@ enable_cmm_invariants
 with_target_bindir
 enable_reserved_header_bits
 enable_stdlib_manpages
+enable_warn_error
 enable_force_safe_string
 enable_flat_float_array
 enable_function_sections
