@@ -4516,7 +4516,7 @@ let unalias ty =
       ty
   | Tvariant row ->
       let Row {fields; name; fixed} = row_repr row in
-      let set_data = cp_set_data row in
+      let set_data = cp_set_data "unalias" row in
       newty2 ~level
         (Tvariant
            (create_row ~fields ~name ~fixed ~set_data))
@@ -4611,7 +4611,7 @@ let rec normalize_type_rec visited ty =
     | Tvariant row ->
       let Row {fields; name; fixed} =
         row_repr row in
-      let set_data = cp_set_data row in
+      let set_data = cp_set_data "normalize_type_rec" row in
       set_type_desc ty
         (Tvariant
           (create_row ~fields ~name ~fixed ~set_data))

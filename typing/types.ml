@@ -44,8 +44,8 @@ and type_desc =
 
 and set_data =
   | SUnknown of string
-  | STags of label list
-  | SVar of int
+  | STags of string * label list
+  | SVar of string * int
   | STop
 
 and set_variance = Left | Right | Unknown
@@ -584,8 +584,11 @@ let file =
 
 let sprint_set_data set_data = match set_data with
   | SUnknown from -> Printf.sprintf "Unknown from %s" from
-  | SVar id -> Printf.sprintf "V%d" id
-  | STags tags -> String.concat "" ["[";String.concat "," tags;"]"]
+  | SVar (from, id) -> Printf.sprintf "V from %s: %d" from id
+  | STags (from, tags) ->
+      Printf.sprintf "Tags from %s: %s"
+        from
+        (String.concat "" ["[";String.concat "," tags;"]"])
   | STop -> "T"
 
 and sprint_variance v = match v with
@@ -612,7 +615,7 @@ let cur_id = ref 0
 let new_id () = cur_id := !cur_id + 1; !cur_id
 
 let set_id set_data = match set_data with
-  | SVar id -> id
+  | SVar (_, id) -> id
   | _ -> -1
 let row_set_id row = set_id row.set_data
 
@@ -625,35 +628,35 @@ let mk_set_unknown from =
   flush file;
   SUnknown from
   end
-let mk_set_var () =
+let mk_set_var from =
   if is_not_test then SUnknown "Not in test" else
-  SVar (new_id ())
+  SVar (from, new_id ())
 let mk_set_var_tags from tags =
   if is_not_test then SUnknown "Not in test" else
-  (let var = mk_set_var () in
+  (let var = mk_set_var from in
   let desc = Printf.sprintf "mk_set_var_tags: %s" from in
-  set_constraint desc (STags tags) var;
+  set_constraint desc (STags (from, tags)) var;
   var)
-let mk_set_tags tags =
+let mk_set_tags from tags =
   if is_not_test then SUnknown "Not in test" else
-  STags tags
+  STags (from, tags)
 let row_set_data row =
   if is_not_test then SUnknown "Not in test" else
   row.set_data
-let cp_set_data row =
+let cp_set_data from row =
   if is_not_test then SUnknown "Not in test" else
   match row.set_data with
-  | SVar id ->
+  | SVar (_, id) ->
       let new_id = new_id () in
 
       let with_id sd = match sd with
-        | SVar idd -> id == idd
+        | SVar (_, idd) -> id == idd
         | _ -> false
       in
       let with_id (sd1, sd2) = with_id sd1 || with_id sd2 in
       let cp_constraints = List.filter with_id !constraints in
       let replace_id sd = match sd with
-        | SVar idd as v -> if id == idd then SVar new_id else v
+        | SVar (_, idd) as v -> if id == idd then SVar (from, new_id) else v
         | sd -> sd
       in
       let replace_id (sd1, sd2) = (replace_id sd1, replace_id sd2) in
@@ -661,7 +664,7 @@ let cp_set_data row =
       constraints := List.append cp_constraints !constraints;
       edges_cache := None;
 
-      SVar new_id
+      SVar (from, new_id)
   | _ as sd -> sd
 
 let sprint_tags tags = String.concat "" ["[";String.concat "," tags;"]"]
@@ -676,7 +679,7 @@ let subset_lists l1 l2 = List.for_all (fun id -> List.mem id l2) l1
 let used_ids constraints =
   let app s l =
     match s with
-    | SVar id -> id :: l
+    | SVar (_, id) -> id :: l
     | _ -> l
   in
   let used_ids =
@@ -713,26 +716,26 @@ let collect_edges_ () =
       | _ -> ());
 
       (match sd2 with
-      | SVar id2 ->
+      | SVar (_, id2) ->
           (match sd1 with
-          | STags tags ->
+          | STags (_, tags) ->
               let t = Hashtbl.find edges_tag_lb id2 in
               t := List.append tags !t
-          | SVar id1 ->
+          | SVar (_, id1) ->
               let v = Hashtbl.find edges_var_lb id2 in
               v := id1 :: !v
           | _ -> ())
       | _ -> ());
 
       (match sd1 with
-      | SVar id1 ->
+      | SVar (_, id1) ->
           (match sd2 with
-          | STags tags ->
+          | STags (_, tags) ->
               let t = Hashtbl.find_opt edges_tag_ub id1 in
               (match t with
               | Some t -> t := intersect_lists tags !t
               | None -> Hashtbl.add edges_tag_ub id1 (ref tags))
-          | SVar id2 ->
+          | SVar (_, id2) ->
               let v = Hashtbl.find edges_var_ub id1 in
               v := id2 :: !v
           | _ -> ())
@@ -818,15 +821,15 @@ let solve_constraints id =
 let sprint_set_type row =
   let data = row.set_data in
   match data with
-  | STags tags -> sprint_tags tags
-  | SVar id when id_used id ->
+  | STags (from, tags) -> Printf.sprintf "%s: %s" from (sprint_tags tags)
+  | SVar (from, id) when id_used id ->
       let solution = solve_constraints id in
-      (match solution with
+      Printf.sprintf "%s: %s" from (match solution with
       | SSTop -> "T"
       | SSTags tags -> sprint_tags tags
       | SSFail -> "Fail")
-  | SVar _ ->
-      Printf.sprintf "Unsure: %s"
+  | SVar (from, _) ->
+      Printf.sprintf "Unsure from %s: %s" from
         (sprint_tags (List.map fst row.row_fields))
   | SUnknown from -> Printf.sprintf "Unknown from %s" from
   | STop -> "T"
@@ -838,7 +841,7 @@ let create_row ~set_data ~fields ~fixed ~name =
 (* [row_fields] subsumes the original [row_repr] *)
 let row_fields row =
   match row.set_data with
-  | SVar id when id_used id ->
+  | SVar (_, id) when id_used id ->
       let (edges, _) = collect_edges () in
       let fields = row.row_fields in
       let ub = solve_ub edges id in
@@ -846,12 +849,12 @@ let row_fields row =
       | Some tags -> intersect_lists_assoc tags fields
       | None -> fields)
   | SUnknown _ | SVar _ -> row.row_fields
-  | STags tags -> intersect_lists_assoc tags row.row_fields
+  | STags (_, tags) -> intersect_lists_assoc tags row.row_fields
   | STop -> row.row_fields
 
 let row_fields_lb row =
   match row.set_data with
-  | SVar id when id_used id ->
+  | SVar (_, id) when id_used id ->
       let (_, edges) = collect_edges () in
       let fields = row.row_fields in
       let lb = solve_lb edges id in
@@ -868,7 +871,7 @@ let row_name row = (row_repr_no_fields row).row_name
 
 let row_closed row =
   match row.set_data with
-  | SVar id when id_used id ->
+  | SVar (_, id) when id_used id ->
       let (edges, _) = collect_edges () in
       let ub = solve_ub edges id in
       (match ub with
@@ -1059,7 +1062,7 @@ let link_type ty ty' =
       -> Transient_expr.set_desc ty
            (Tvariant
              (create_row
-                ~set_data:(mk_set_var ())
+                ~set_data:(mk_set_var "link_type")
                 ~fields:[]
                 ~fixed:None
                 ~name:None))

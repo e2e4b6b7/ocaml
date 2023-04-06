@@ -305,12 +305,12 @@ val row_set_data: row_desc -> set_data
 val row_set_id: row_desc -> int
 
 val mk_set_top: unit -> set_data
-val mk_set_var: unit -> set_data
+val mk_set_var: string -> set_data
 val mk_set_var_tags: string -> label list -> set_data
-val mk_set_tags: label list -> set_data
+val mk_set_tags: string -> label list -> set_data
 val mk_set_unknown: string -> set_data
 
-val cp_set_data: row_desc -> set_data
+val cp_set_data: string -> row_desc -> set_data
 
 type set_variance = Left | Right | Unknown
 

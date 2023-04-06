@@ -1,18 +1,15 @@
 #!/bin/bash
 # romanv automation script
 
+make partialclean || exit
+make -j 7 || exit
 make ocamlc || exit
 make ocamlopt || exit
 
 cd testsuite
 
-rm -f _ocamltest/tests/typing-misc/polyvars/dump.txt
-
-touch /tmp/is_test
 make one TEST=tests/typing-misc/polyvars.ml
-rm /tmp/is_test
 
-echo
-cat _ocamltest/tests/typing-misc/polyvars/dump.txt
+cd ..
 
-./clean > /dev/null
+# cat testsuite/_ocamltest/tests/typing-misc/polyvars/dump.txt

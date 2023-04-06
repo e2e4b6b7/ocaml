@@ -574,7 +574,7 @@ and build_as_type_aux ~refine (env : Env.t ref) p =
           ty1
       | Some row ->
           let Row {fields; fixed; name} = row_repr row in
-          let set_data = cp_set_data row in
+          let set_data = cp_set_data "build_as_type_aux" row in
           newty (Tvariant (create_row ~fields ~fixed ~name ~set_data))
       end
   | Tpat_any | Tpat_var _ | Tpat_constant _

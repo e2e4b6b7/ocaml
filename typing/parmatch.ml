@@ -1418,7 +1418,7 @@ let rec pressure_variants tdefs = function
                     set_constraint
                       "pressure_variants"
                       (row_set_data row)
-                      (mk_set_tags fields)
+                      (mk_set_tags "pressure_variants" fields)
                   end
                 | _ -> ()
               end;

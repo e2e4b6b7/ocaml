@@ -323,7 +323,7 @@ and transl_type_aux env policy styp =
         Tvariant row ->
           let fields = row_fields row in
           (* NB: row is always non-static here; more is thus never Tnil *)
-          let set_data = cp_set_data row in
+          let set_data = cp_set_data "transl_type_aux" row in
           let row =
             create_row ~fields
               ~fixed:None ~name:(Some (path, ty_args))

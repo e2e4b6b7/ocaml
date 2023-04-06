@@ -2089,7 +2089,7 @@ let hide_variant_name t =
   | Tvariant row ->
       let Row {fields; name; fixed} = row_repr row in
       if name = None then t else
-      let set_data = cp_set_data row in
+      let set_data = cp_set_data "hide_variant_name" row in
       newty2 ~level:(get_level t)
         (Tvariant
            (create_row ~fields ~fixed ~name:None
