@@ -1056,16 +1056,7 @@ let link_type ty ty' =
   let ty' = repr ty' in
   if ty == ty' then () else
   match ty.desc, ty'.desc with
-  | Tvariant _, Tvariant _
-      -> () (* romanv: To validate *)
-  | Tvar _, Tvariant _
-      -> Transient_expr.set_desc ty
-           (Tvariant
-             (create_row
-                ~set_data:(mk_set_var "link_type")
-                ~fields:[]
-                ~fixed:None
-                ~name:None))
+  | Tvariant _, Tvariant _ -> ()
   | _ -> link_type_ ty ty'
 (* TODO: consider eliminating set_type_desc, replacing it with link types *)
 let set_type_desc ty td =
