@@ -2,14 +2,20 @@
 # romanv automation script
 
 ./clean
-# git stage .
-# git commit --amend -m "Test"
 
-git checkout 4.14 ||exit
+git checkout 4.14 || exit
 git checkout HEAD -- boot || exit
+##########################################
 make partialclean -j 7 || exit
+### or
+# make clean -j 7 || exit
+# ./configure CC=clang CFLAGS="-Wno-strict-prototypes -Wno-unused-but-set-variable" || exit
+##########################################
 make world.opt -j 7 || exit
 
-git checkout constraints-2 || exit
+git checkout constraints || exit
 make coreall -j 7 || exit
-make bootstrap -j 7 ||exit
+make bootstrap -j 7 || exit
+make -j 7 || exit
+
+./clean

@@ -1,7 +1,6 @@
 #!/bin/bash
 # romanv automation script
 
-make partialclean || exit
 make -j 7 || exit
 make ocamlc || exit
 make ocamlopt || exit
