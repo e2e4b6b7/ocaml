@@ -45,7 +45,7 @@ and type_desc =
 and set_data =
   | SUnknown of string
   | STags of string * label list
-  | SVar of string * int
+  | SVar of string * int ref
   | STop
 
 and set_variance = Left | Right | Unknown
@@ -569,7 +569,18 @@ let compare_type t1 t2 = compare (get_id t1) (get_id t2)
 
 (* Constructor and accessors for [row_desc] *)
 
-type set_solution = SSTop | SSTags of string list | SSFail
+type set_solution =
+  | SSSolution of
+      string list option * (* lb *)
+      string list option   (* ub *)
+  | SSFail
+
+module Hashtbl = Hashtbl.Make(struct
+  type t = int ref
+  let equal = (==)
+  let hash = Hashtbl.hash
+end)
+
 
 let constraints = ref []
 let edges_cache = ref None
@@ -582,9 +593,26 @@ let file =
   Printf.fprintf file "\n-- New env --\n\n";
   file
 
+let copies = ref []
+let trace_copies id =
+  let rec trace_copies_aux copies id =
+    match copies with
+    | [] -> "", id
+    | (from_id, to_id) :: copies ->
+        if to_id == id
+        then
+          let trace, init_id = trace_copies_aux copies from_id in
+          Printf.sprintf "%d <- %s" !id trace, init_id
+        else trace_copies_aux copies id in
+  let trace, id = trace_copies_aux !copies id in
+  if String.length trace > 0 then
+  Printf.fprintf file "%s%d\n" trace !id
+
 let sprint_set_data set_data = match set_data with
   | SUnknown from -> Printf.sprintf "Unknown from %s" from
-  | SVar (from, id) -> Printf.sprintf "V from %s: %d" from id
+  | SVar (from, id) ->
+      trace_copies id;
+      Printf.sprintf "V from %s: %d" from !id
   | STags (from, tags) ->
       Printf.sprintf "Tags from %s: %s"
         from
@@ -598,7 +626,7 @@ and sprint_variance v = match v with
 
 let set_constraint from ?(v = Right) s1 s2 =
   if is_not_test then () else
-  (Printf.fprintf file "From: %s\nVariance: %s\n" from (sprint_variance v);
+  (Printf.fprintf file "From: %s; Variance: %s\n" from (sprint_variance v);
   Printf.fprintf file "%s -- %s\n\n" (sprint_set_data s1) (sprint_set_data s2);
   flush file;
   edges_cache := None;
@@ -612,12 +640,12 @@ let set_unknown_constraint from =
   Printf.fprintf file "Unknown constraint from: %s\n" from; flush file
 
 let cur_id = ref 0
-let new_id () = cur_id := !cur_id + 1; !cur_id
+let new_id () = cur_id := !cur_id + 1; ref !cur_id
 
 let set_id set_data = match set_data with
   | SVar (_, id) -> id
-  | _ -> -1
-let row_set_id row = set_id row.set_data
+  | _ -> ref (-1)
+let row_set_id row = !(set_id row.set_data)
 
 let mk_set_top () =
   if is_not_test then SUnknown "Not in test" else
@@ -643,38 +671,50 @@ let mk_set_tags from tags =
 let row_set_data row =
   if is_not_test then SUnknown "Not in test" else
   row.set_data
+let cp_set_variable from id =
+  let new_id = new_id () in
+
+  copies := (id, new_id) :: !copies;
+
+  (* let with_id sd =
+    match sd with
+    | SVar (_, idd) -> id == idd
+    | _ -> false
+  in
+  let with_id (sd1, sd2) = with_id sd1 || with_id sd2 in
+
+  let cp_constraints = List.filter with_id !constraints in
+  let replace_id sd =
+    match sd with
+    | SVar (_, idd) as v -> if id == idd then SVar (from, new_id) else v
+    | sd -> sd
+  in
+  let replace_id (sd1, sd2) = (replace_id sd1, replace_id sd2) in
+  let cp_constraints = List.map replace_id cp_constraints in
+  constraints := List.append cp_constraints !constraints;
+  edges_cache := None; *)
+
+  SVar (from, new_id)
+
 let cp_set_data from row =
   if is_not_test then SUnknown "Not in test" else
   match row.set_data with
-  | SVar (_, id) ->
-      let new_id = new_id () in
-
-      let with_id sd = match sd with
-        | SVar (_, idd) -> id == idd
-        | _ -> false
-      in
-      let with_id (sd1, sd2) = with_id sd1 || with_id sd2 in
-      let cp_constraints = List.filter with_id !constraints in
-      let replace_id sd = match sd with
-        | SVar (_, idd) as v -> if id == idd then SVar (from, new_id) else v
-        | sd -> sd
-      in
-      let replace_id (sd1, sd2) = (replace_id sd1, replace_id sd2) in
-      let cp_constraints = List.map replace_id cp_constraints in
-      constraints := List.append cp_constraints !constraints;
-      edges_cache := None;
-
-      SVar (from, new_id)
-  | _ as sd -> sd
+  | SVar (_, id) -> cp_set_variable from id
+  | sd -> sd
 
 let sprint_tags tags = String.concat "" ["[";String.concat "," tags;"]"]
 
-let intersect_lists l1 l2 = List.filter (fun x -> List.mem x l1) l2
-let intersect_lists_assoc l1 l2 = List.filter (fun (x, _) -> List.mem x l1) l2
+let intersect_lists l1 l2 = List.filter (fun x -> List.memq x l1) l2
+let intersect_lists_assoc l1 l2 = List.filter (fun (x, _) -> List.memq x l1) l2
 (* Checks that l1 is subset of l2 *)
-let subset_lists l1 l2 = List.for_all (fun id -> List.mem id l2) l1
+let subset_lists l1 l2 = List.for_all (fun id -> List.memq id l2) l1
 
 (* edges = ((edges_var_ub, edges_tag_ub), (edges_var_lb, edges_tag_lb)) *)
+
+let rec uniq l =
+  match l with
+  | [] -> []
+  | h :: t -> h :: uniq (List.filter (fun e -> not (e == h)) t)
 
 let used_ids constraints =
   let app s l =
@@ -688,11 +728,11 @@ let used_ids constraints =
       []
       constraints
   in
-  List.sort_uniq Int.compare used_ids
+  uniq used_ids
 
 exception Romanv of string
 
-let collect_edges_ () =
+let collect_edges_ () = try
   let constraints = !constraints in
   let used_ids = used_ids constraints in
 
@@ -708,13 +748,6 @@ let collect_edges_ () =
     used_ids;
   List.iter
     (fun (sd1, sd2) ->
-      (match sd1, sd2 with
-      | STop, _ | _, STop ->
-          Printf.printf "STop in constrint\n"
-      (* | SUnknown _, _ | _, SUnknown _ ->
-          Printf.printf "SUnknown in constrint\n" *)
-      | _ -> ());
-
       (match sd2 with
       | SVar (_, id2) ->
           (match sd1 with
@@ -748,6 +781,7 @@ let collect_edges_ () =
       | None -> Hashtbl.add edges_tag_ub id (ref []))
     used_ids;
   used_ids, ((edges_var_ub, edges_tag_ub), (edges_var_lb, edges_tag_lb))
+with Not_found -> raise (Romanv "Not_found in collect_edges_")
 
 let collect_edges () =
   let (_, edges) = collect_edges_ () in
@@ -755,24 +789,44 @@ let collect_edges () =
 
 let id_used id =
   let used_ids = used_ids !constraints in
-  List.mem id used_ids
+  List.memq id used_ids
 
-let solve_for merge (edges_var, edges_tag) id = try
-  assert (Hashtbl.mem edges_tag id);
-  assert (Hashtbl.mem edges_var id);
-  let used = Hashtbl.create 17 in
-  let rec solve_for_aux id =
-    Hashtbl.add used id ();
-    let v = Hashtbl.find edges_var id in
-    let sub_vars = List.filter (fun id -> not @@ Hashtbl.mem used id) !v in
-    let t = Hashtbl.find edges_tag id in
-    let t = !t in
-    let t = if t = [] then None else Some t in
-    let tags = t :: List.map solve_for_aux sub_vars in
-    let tags = List.fold_left merge None tags in
-    Option.map (List.sort_uniq String.compare) tags in
-  solve_for_aux id
-with Not_found -> raise (Romanv "Not found in solve_for")
+let solve_for_ merge (edges_var, edges_tag) id =
+  if not (Hashtbl.mem edges_tag id) ||
+     not (Hashtbl.mem edges_var id)
+  then None else try
+    let used = Hashtbl.create 17 in
+    let rec solve_for_aux id =
+      Hashtbl.add used id ();
+      let v = Hashtbl.find edges_var id in
+      let sub_vars = List.filter (fun id -> not @@ Hashtbl.mem used id) !v in
+      let t = Hashtbl.find edges_tag id in
+      let t = !t in
+      let t = if t = [] then None else Some t in
+      let tags = t :: List.map solve_for_aux sub_vars in
+      let tags = List.fold_left merge None tags in
+      Option.map (List.sort_uniq String.compare) tags in
+    solve_for_aux id
+  with Not_found -> raise (Romanv "Not_found in solve_for")
+
+let find_parent id =
+  let rec find_parent_aux copies id =
+    match copies with
+    | [] -> None
+    | (from_id, to_id) :: copies ->
+      if to_id == id
+      then Some from_id
+      else find_parent_aux copies id in
+  find_parent_aux !copies id
+
+let rec solve_for merge edges id =
+  let parent_id = find_parent id in
+  match parent_id with
+  | Some parent_id ->
+      let parent_solution = solve_for merge edges parent_id in
+      let solution = solve_for_ merge edges id in
+      merge parent_solution solution
+  | None -> solve_for_ merge edges id
 
 let solve_ub edges_ub id =
   let opt_intersect a b =
@@ -796,7 +850,8 @@ let log_bounds ub lb id =
   let sprint_bound b = match b with
   | Some t -> sprint_tags t
   | None -> "-" in
-  Printf.fprintf file "%d: ub: %s | lb: %s\n" id (sprint_bound ub) (sprint_bound lb)
+  trace_copies id;
+  Printf.fprintf file "%d: ub: %s | lb: %s\n\n" !id (sprint_bound ub) (sprint_bound lb)
 
 let solve_set_type (edges_ub, edges_lb) id =
   assert (id_used id);
@@ -808,15 +863,19 @@ let solve_set_type (edges_ub, edges_lb) id =
   match ub, lb with
   | Some ub_tags, Some lb_tags ->
           if subset_lists lb_tags ub_tags
-            then SSTags ub_tags
+            then SSSolution (Some lb_tags, Some ub_tags)
             else SSFail
-  | Some ub_tags, None -> SSTags ub_tags
-  | None, Some lb_tags -> SSTags lb_tags
-  | None, None -> SSTop
+  | Some ub_tags, None -> SSSolution (None, Some ub_tags)
+  | None, Some lb_tags -> SSSolution (Some lb_tags, None)
+  | None, None -> SSSolution (None, None)
 
 let solve_constraints id =
   let edges = collect_edges () in
   solve_set_type edges id
+
+let print_bound b = match b with
+| Some tags -> sprint_tags tags
+| None -> "T"
 
 let sprint_set_type row =
   let data = row.set_data in
@@ -824,9 +883,9 @@ let sprint_set_type row =
   | STags (from, tags) -> Printf.sprintf "%s: %s" from (sprint_tags tags)
   | SVar (from, id) when id_used id ->
       let solution = solve_constraints id in
-      Printf.sprintf "%s: %s" from (match solution with
-      | SSTop -> "T"
-      | SSTags tags -> sprint_tags tags
+      Printf.sprintf "%d, %s: %s" !id from (match solution with
+      | SSSolution (lb, ub) ->
+          Printf.sprintf "[< %s > %s]" (print_bound lb) (print_bound ub)
       | SSFail -> "Fail")
   | SVar (from, _) ->
       Printf.sprintf "Unsure from %s: %s" from

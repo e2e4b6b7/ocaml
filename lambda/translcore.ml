@@ -1078,10 +1078,6 @@ and transl_match ~scopes e arg pat_expr_list partial =
     let x, y, z = List.fold_left rewrite_case ([], [], []) pat_expr_list in
     List.rev x, List.rev y, List.rev z
   in
-  let line = arg.exp_loc.loc_start.pos_lnum in
-  if line == 1054 then
-    Printf.printf "vc: %d; ec: %d; sh: %d\n"
-      (List.length val_cases) (List.length exn_cases) (List.length static_handlers);
   (* In presence of exception patterns, the code we generate for
 
        match <scrutinees> with
@@ -1128,21 +1124,16 @@ and transl_match ~scopes e arg pat_expr_list partial =
           (Matching.for_multiple_match ~scopes e.exp_loc
              lvars val_cases partial)
     | arg, [] ->
-      if line == 1054 then Printf.printf "here 1\n";
       assert (static_handlers = []);
       Matching.for_function ~scopes e.exp_loc
         None (transl_exp ~scopes arg) val_cases partial
     | arg, _ :: _ ->
-        if line == 1054 then Printf.printf "here 2\n";
         let val_id = Typecore.name_pattern "val" (List.map fst val_cases) in
         let k = Typeopt.value_kind arg.exp_env arg.exp_type in
         static_catch [transl_exp ~scopes arg] [val_id, k]
           (Matching.for_function ~scopes e.exp_loc
              None (Lvar val_id) val_cases partial)
   in
-  if line == 1054 then
-    (Printlambda.lambda Format.std_formatter classic;
-    Format.pp_print_newline Format.std_formatter ());
   List.fold_left (fun body (static_exception_id, val_ids, handler) ->
     Lstaticcatch (body, (static_exception_id, val_ids), handler)
   ) classic static_handlers

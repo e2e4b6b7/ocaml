@@ -763,7 +763,7 @@ let solve_Ppat_variant ~refine loc env tag no_arg expected_ty =
   let arg_type = if no_arg then None else Some (newgenvar()) in
   let fields = [tag, arg_type] in
   let make_row () =
-    let set_data = mk_set_var_tags "solve_Ppat_variant" [tag] in
+    let set_data = mk_set_var "solve_Ppat_variant" in
     create_row ~fields ~fixed:None ~name:None ~set_data
   in
   let row = make_row () in
