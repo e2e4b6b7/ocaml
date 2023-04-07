@@ -728,7 +728,17 @@ let used_ids constraints =
       []
       constraints
   in
-  uniq used_ids
+  let ans = uniq used_ids in
+  List.iter
+    (fun (s1, s2) ->
+      match s1 with
+      | SVar (_, id) -> assert (List.memq id ans)
+      | _ -> ();
+      match s2 with
+      | SVar (_, id) -> assert (List.memq id ans)
+      | _ -> ())
+    constraints;
+  ans
 
 exception Romanv of string
 
@@ -881,15 +891,12 @@ let sprint_set_type row =
   let data = row.set_data in
   match data with
   | STags (from, tags) -> Printf.sprintf "%s: %s" from (sprint_tags tags)
-  | SVar (from, id) when id_used id ->
+  | SVar (from, id) ->
       let solution = solve_constraints id in
       Printf.sprintf "%d, %s: %s" !id from (match solution with
       | SSSolution (lb, ub) ->
           Printf.sprintf "[< %s > %s]" (print_bound lb) (print_bound ub)
       | SSFail -> "Fail")
-  | SVar (from, _) ->
-      Printf.sprintf "Unsure from %s: %s" from
-        (sprint_tags (List.map fst row.row_fields))
   | SUnknown from -> Printf.sprintf "Unknown from %s" from
   | STop -> "T"
 
@@ -900,27 +907,27 @@ let create_row ~set_data ~fields ~fixed ~name =
 (* [row_fields] subsumes the original [row_repr] *)
 let row_fields row =
   match row.set_data with
-  | SVar (_, id) when id_used id ->
+  | SVar (_, id) ->
       let (edges, _) = collect_edges () in
       let fields = row.row_fields in
       let ub = solve_ub edges id in
       (match ub with
       | Some tags -> intersect_lists_assoc tags fields
       | None -> fields)
-  | SUnknown _ | SVar _ -> row.row_fields
+  | SUnknown _ -> row.row_fields
   | STags (_, tags) -> intersect_lists_assoc tags row.row_fields
   | STop -> row.row_fields
 
 let row_fields_lb row =
   match row.set_data with
-  | SVar (_, id) when id_used id ->
+  | SVar (_, id) ->
       let (_, edges) = collect_edges () in
       let fields = row.row_fields in
       let lb = solve_lb edges id in
       (match lb with
       | Some tags -> intersect_lists_assoc tags fields
       | None -> fields)
-  | SUnknown _ | SVar _ -> row.row_fields
+  | SUnknown _ -> row.row_fields
   | _ -> assert false
 
 let row_repr_no_fields row = row
@@ -930,13 +937,13 @@ let row_name row = (row_repr_no_fields row).row_name
 
 let row_closed row =
   match row.set_data with
-  | SVar (_, id) when id_used id ->
+  | SVar (_, id) ->
       let (edges, _) = collect_edges () in
       let ub = solve_ub edges id in
       (match ub with
       | Some _ -> true
       | None -> false)
-  | SUnknown _ | SVar _ -> false
+  | SUnknown _ -> false
   | _ -> assert false
 
 let dump tag row =
