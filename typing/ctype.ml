@@ -4608,13 +4608,6 @@ let rec normalize_type_rec visited ty =
           set_type_desc ty (Tconstr(Path.Pdot(m,i'), tl, ref Mnil))
       | _ -> assert false
     else match get_desc ty with
-    | Tvariant row ->
-      let Row {fields; name; fixed} =
-        row_repr row in
-      let set_data = cp_set_data "normalize_type_rec" row in
-      set_type_desc ty
-        (Tvariant
-          (create_row ~fields ~name ~fixed ~set_data))
     | Tobject (fi, nm) ->
         begin match !nm with
         | None -> ()

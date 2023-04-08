@@ -965,6 +965,7 @@ let reserve_names ty =
   Names.add_named_vars ty
 
 let visited_objects = ref ([] : transient_expr list)
+let visited_polyvariants = ref ([] : set_id list)
 let aliased = ref ([] : transient_expr list)
 let delayed = ref ([] : transient_expr list)
 let printed_aliases = ref ([] : transient_expr list)
@@ -999,7 +1000,6 @@ let aliasable ty =
 
 let should_visit_object ty =
   match get_desc ty with
-  | Tvariant row -> not (static_row row)
   | Tobject _ -> opened_object ty
   | _ -> false
 
@@ -1009,11 +1009,19 @@ let rec mark_loops_rec visited ty =
     let tty = Transient_expr.repr ty in
     let visited = px :: visited in
     match tty.desc with
-    | Tvariant _ | Tobject _ ->
+    | Tobject _ ->
         if List.memq px !visited_objects then add_alias_proxy px else begin
           (* romanv: proxy (`as` type in output) creates here ^ *)
           if should_visit_object ty then
             visited_objects := px :: !visited_objects;
+          printer_iter_type_expr (mark_loops_rec visited) ty
+        end
+    | Tvariant row ->
+        (* romanv: To create aliasing & solving *)
+        let set_id = row_set_id row in
+        if List.memq set_id !visited_polyvariants
+        then add_alias_proxy px else begin
+          visited_polyvariants := set_id :: !visited_polyvariants;
           printer_iter_type_expr (mark_loops_rec visited) ty
         end
     | Tpoly(ty, tyl) ->
@@ -1030,7 +1038,7 @@ let prepare_type ty =
   mark_loops ty;;
 
 let reset_loop_marks () =
-  visited_objects := []; aliased := []; delayed := []; printed_aliases := []
+  visited_objects := []; visited_polyvariants := []; aliased := []; delayed := []; printed_aliases := []
 
 let reset_except_context () =
   Names.reset_names (); reset_loop_marks ()

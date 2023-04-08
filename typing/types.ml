@@ -42,10 +42,12 @@ and type_desc =
   | Tpoly of type_expr * type_expr list
   | Tpackage of Path.t * (Longident.t * type_expr) list
 
+and set_id = int ref
+
 and set_data =
   | SUnknown of string
   | STags of string * label list
-  | SVar of string * int ref
+  | SVar of string * set_id
   | STop
 
 and set_variance = Left | Right | Unknown
@@ -570,7 +572,9 @@ let compare_type t1 t2 = compare (get_id t1) (get_id t2)
 (* Constructor and accessors for [row_desc] *)
 
 type set_solution =
-  | SSSolution of
+  | SSUnion of set_solution * set_solution
+  | SSVariable of set_id
+  | SSTags of
       string list option * (* lb *)
       string list option   (* ub *)
   | SSFail
@@ -580,7 +584,6 @@ module Hashtbl = Hashtbl.Make(struct
   let equal = (==)
   let hash = Hashtbl.hash
 end)
-
 
 let constraints = ref []
 let edges_cache = ref None
@@ -645,7 +648,7 @@ let new_id () = cur_id := !cur_id + 1; ref !cur_id
 let set_id set_data = match set_data with
   | SVar (_, id) -> id
   | _ -> ref (-1)
-let row_set_id row = !(set_id row.set_data)
+let row_set_id row = set_id row.set_data
 
 let mk_set_top () =
   if is_not_test then SUnknown "Not in test" else
@@ -797,10 +800,6 @@ let collect_edges () =
   let (_, edges) = collect_edges_ () in
   edges_cache := Some edges; edges
 
-let id_used id =
-  let used_ids = used_ids !constraints in
-  List.memq id used_ids
-
 let solve_for_ merge (edges_var, edges_tag) id =
   if not (Hashtbl.mem edges_tag id) ||
      not (Hashtbl.mem edges_var id)
@@ -864,7 +863,6 @@ let log_bounds ub lb id =
   Printf.fprintf file "%d: ub: %s | lb: %s\n\n" !id (sprint_bound ub) (sprint_bound lb)
 
 let solve_set_type (edges_ub, edges_lb) id =
-  assert (id_used id);
   let ub = solve_ub edges_ub id in
   let lb = solve_lb edges_lb id in
 
@@ -873,15 +871,17 @@ let solve_set_type (edges_ub, edges_lb) id =
   match ub, lb with
   | Some ub_tags, Some lb_tags ->
           if subset_lists lb_tags ub_tags
-            then SSSolution (Some lb_tags, Some ub_tags)
+            then SSTags (Some lb_tags, Some ub_tags)
             else SSFail
-  | Some ub_tags, None -> SSSolution (None, Some ub_tags)
-  | None, Some lb_tags -> SSSolution (Some lb_tags, None)
-  | None, None -> SSSolution (None, None)
+  | Some ub_tags, None -> SSTags (None, Some ub_tags)
+  | None, Some lb_tags -> SSTags (Some lb_tags, None)
+  | None, None -> SSTags (None, None)
 
-let solve_constraints id =
+let solve_set_type id =
   let edges = collect_edges () in
   solve_set_type edges id
+
+let solve_set_type_with_context context row = assert false
 
 let print_bound b = match b with
 | Some tags -> sprint_tags tags
@@ -892,11 +892,12 @@ let sprint_set_type row =
   match data with
   | STags (from, tags) -> Printf.sprintf "%s: %s" from (sprint_tags tags)
   | SVar (from, id) ->
-      let solution = solve_constraints id in
+      let solution = solve_set_type id in
       Printf.sprintf "%d, %s: %s" !id from (match solution with
-      | SSSolution (lb, ub) ->
+      | SSTags (lb, ub) ->
           Printf.sprintf "[< %s > %s]" (print_bound lb) (print_bound ub)
-      | SSFail -> "Fail")
+      | SSFail -> "Fail"
+      | _ -> assert false)
   | SUnknown from -> Printf.sprintf "Unknown from %s" from
   | STop -> "T"
 
