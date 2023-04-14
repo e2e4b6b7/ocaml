@@ -542,6 +542,9 @@ and raw_type_desc ppf = function
           match name with None -> fprintf ppf "None"
           | Some(p,tl) ->
               fprintf ppf "Some(@,%a,@,%a)" path p raw_type_list tl)
+  | Tsetop (op, l, r) ->
+      fprintf ppf "@[<1>Tsetop@,%s@,%a@,%a@]" (setop_name op) raw_type l raw_type r
+  | Ttags _ -> assert false
   | Tpackage (p, fl) ->
       fprintf ppf "@[<hov1>Tpackage(@,%a@,%a)@]" path p
         raw_type_list (List.map snd fl)
@@ -965,7 +968,6 @@ let reserve_names ty =
   Names.add_named_vars ty
 
 let visited_objects = ref ([] : transient_expr list)
-let visited_polyvariants = ref ([] : set_id list)
 let aliased = ref ([] : transient_expr list)
 let delayed = ref ([] : transient_expr list)
 let printed_aliases = ref ([] : transient_expr list)
@@ -1000,6 +1002,7 @@ let aliasable ty =
 
 let should_visit_object ty =
   match get_desc ty with
+  | Tvariant row -> not (static_row row)
   | Tobject _ -> opened_object ty
   | _ -> false
 
@@ -1009,21 +1012,13 @@ let rec mark_loops_rec visited ty =
     let tty = Transient_expr.repr ty in
     let visited = px :: visited in
     match tty.desc with
-    | Tobject _ ->
-        if List.memq px !visited_objects then add_alias_proxy px else begin
-          (* romanv: proxy (`as` type in output) creates here ^ *)
-          if should_visit_object ty then
-            visited_objects := px :: !visited_objects;
-          printer_iter_type_expr (mark_loops_rec visited) ty
-        end
-    | Tvariant row ->
-        (* romanv: To create aliasing & solving *)
-        let set_id = row_set_id row in
-        if List.memq set_id !visited_polyvariants
-        then add_alias_proxy px else begin
-          visited_polyvariants := set_id :: !visited_polyvariants;
-          printer_iter_type_expr (mark_loops_rec visited) ty
-        end
+    | Tvariant _ | Tobject _ ->
+      if List.memq px !visited_objects then add_alias_proxy px else begin
+        (* romanv: proxy (`as` type in output) creates here ^ *)
+        if should_visit_object ty then
+          visited_objects := px :: !visited_objects;
+        printer_iter_type_expr (mark_loops_rec visited) ty
+      end
     | Tpoly(ty, tyl) ->
         List.iter add_alias tyl;
         mark_loops_rec visited ty
@@ -1034,11 +1029,12 @@ let mark_loops ty =
   mark_loops_rec [] ty;;
 
 let prepare_type ty =
+  solve_type ty;
   reserve_names ty;
   mark_loops ty;;
 
 let reset_loop_marks () =
-  visited_objects := []; visited_polyvariants := []; aliased := []; delayed := []; printed_aliases := []
+  visited_objects := []; aliased := []; delayed := []; printed_aliases := []
 
 let reset_except_context () =
   Names.reset_names (); reset_loop_marks ()
@@ -1123,6 +1119,23 @@ let rec tree_of_typexp mode ty =
               if all_present then None else Some (List.map fst present) in
             Otyp_variant (sprint_set_type row, non_gen, Ovar_fields fields, true, tags)
         end
+    | Ttags desc ->
+        let tags = List.map fst3 desc in
+        let fields =
+          List.map
+            (fun (l, r, ty) ->
+              (l, r, Option.to_list @@ Option.map (tree_of_typexp mode) ty))
+            desc
+        in
+        let str = if List.length desc == 1 then "T" else "" in
+        Otyp_variant (str, false, Ovar_fields fields, true, Some tags)
+    | Tsetop (op, l, r) ->
+        let op_str =
+          match op with
+          | Union -> "|"
+          | Intersection -> "&"
+        in
+        Otyp_setop (op_str, tree_of_typexp mode l, tree_of_typexp mode r)
     | Tobject (fi, nm) ->
         tree_of_typobject mode fi !nm
     | Tnil | Tfield _ ->

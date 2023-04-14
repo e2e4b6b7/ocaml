@@ -61,6 +61,9 @@ type row_field
 type field_kind
 type commutable
 
+(* romanv: should be splitted
+           or marked with polyvariants parameter
+          but it requires lots of work *)
 type type_desc =
   | Tvar of string option
   (** [Tvar (Some "a")] ==> ['a] or ['_a]
@@ -120,6 +123,14 @@ type type_desc =
   | Tvariant of row_desc
   (** Representation of polymorphic variants, see [row_desc]. *)
 
+  | Tsetop of setop * type_expr * type_expr
+  (** Union of the polymorphic variants.
+      Creates after solving of the polymorphic variant type *)
+
+  | Ttags of tags_desc
+  (** Solved tags for the polymorphic variants
+      *)
+
   | Tunivar of string option
   (** Occurrence of a type variable introduced by a
       forall quantifier / [Tpoly]. *)
@@ -137,6 +148,12 @@ and fixed_explanation =
   | Fixed_private (** The row type is private *)
   | Reified of Path.t (** The row was reified *)
   | Rigid (** The row type was made rigid during constraint verification *)
+
+and setop =
+  | Union
+  | Intersection
+
+and tags_desc = (label * bool * type_expr option) list
 
 (** [abbrev_memo] allows one to keep track of different expansions of a type
     alias. This is done for performance purposes.
@@ -304,11 +321,14 @@ type set_id
 
 type set_solution =
   | SSUnion of set_solution * set_solution
+  | SSIntersection of set_solution * set_solution
   | SSVariable of set_id
   | SSTags of
       string list option * (* lb *)
       string list option   (* ub *)
   | SSFail
+
+val setop_name: setop -> string
 
 val row_set_data: row_desc -> set_data
 val row_set_id: row_desc -> set_id

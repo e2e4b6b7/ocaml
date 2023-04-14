@@ -428,3 +428,5 @@ val package_subtype :
 
 (* Raises [Incompatible] *)
 val mcomp : Env.t -> type_expr -> type_expr -> unit
+
+val solve_type : type_expr -> unit

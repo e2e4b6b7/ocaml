@@ -103,6 +103,8 @@ let compute_variance env visited vari ty =
                 compute_same ty
             | None -> ())
           (row_fields row)
+    | Tsetop _ | Ttags _ ->
+        assert false
     | Tpoly (ty, _) ->
         compute_same ty
     | Tvar _ | Tnil | Tlink _ | Tunivar _ -> ()

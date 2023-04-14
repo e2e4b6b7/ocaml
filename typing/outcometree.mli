@@ -74,6 +74,7 @@ type out_type =
   | Otyp_var of bool * string
   | Otyp_variant of
       string * bool * out_variant * bool * (string list) option
+  | Otyp_setop of string * out_type * out_type
   | Otyp_poly of string list * out_type
   | Otyp_module of out_ident * (string * out_type) list
   | Otyp_attribute of out_type * out_attribute

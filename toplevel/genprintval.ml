@@ -470,6 +470,7 @@ module Make(O : OBJ)(EVP : EVALPATH with type valu = O.t) = struct
                       else find fields
                   | [] -> Oval_stuff "<variant>" in
                 find (row_fields row)
+          | Tsetop _ | Ttags _ -> assert false
           | Tobject (_, _) ->
               Oval_stuff "<obj>"
           | Tsubst _ | Tfield(_, _, _, _) | Tnil | Tlink _ ->

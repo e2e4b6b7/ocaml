@@ -251,6 +251,16 @@ let fold_type_expr f init ty =
   | Tobject (ty, _)     -> f init ty
   | Tvariant row        ->
       fold_row f init row
+  | Tsetop (_, l, r) ->
+      f (f init l) r
+  | Ttags tags ->
+      List.fold_left
+        (fun acc (_, _, ty) ->
+          match ty with
+          | Some ty -> f acc ty
+          | None -> acc)
+        init
+        tags
   | Tfield (_, _, ty1, ty2) ->
       let result = f init ty1 in
       f result ty2
@@ -417,6 +427,8 @@ let rec copy_type_desc ?(keep_names=false) f = function
                         -> Tobject (f ty, ref (Some(p, List.map f tl)))
   | Tobject (ty, _)     -> Tobject (f ty, ref None)
   | Tvariant _          -> assert false (* too ambiguous *)
+  | Ttags _
+  | Tsetop _            -> assert false
   | Tfield (p, k, ty1, ty2) ->
       Tfield (p, field_kind_internal_repr k, f ty1, f ty2)
       (* the kind is kept shared, with indirections removed for performance *)

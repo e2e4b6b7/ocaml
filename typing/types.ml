@@ -38,9 +38,17 @@ and type_desc =
   | Tlink of type_expr
   | Tsubst of type_expr * type_expr option
   | Tvariant of row_desc
+  | Tsetop of setop * type_expr * type_expr
+  | Ttags of tags_desc
   | Tunivar of string option
   | Tpoly of type_expr * type_expr list
   | Tpackage of Path.t * (Longident.t * type_expr) list
+
+and setop =
+  | Union
+  | Intersection
+
+and tags_desc = (label * bool * type_expr option) list
 
 and set_id = int ref
 
@@ -573,11 +581,17 @@ let compare_type t1 t2 = compare (get_id t1) (get_id t2)
 
 type set_solution =
   | SSUnion of set_solution * set_solution
+  | SSIntersection of set_solution * set_solution
   | SSVariable of set_id
   | SSTags of
       string list option * (* lb *)
       string list option   (* ub *)
   | SSFail
+
+type set_bound_solution = {
+  tags: string list option;
+  variables: set_id list;
+}
 
 module Hashtbl = Hashtbl.Make(struct
   type t = int ref
@@ -622,10 +636,14 @@ let sprint_set_data set_data = match set_data with
         (String.concat "" ["[";String.concat "," tags;"]"])
   | STop -> "T"
 
-and sprint_variance v = match v with
+let sprint_variance v = match v with
   | Left -> "Left"
   | Right -> "Right"
   | Unknown -> "Unknown"
+
+let setop_name op = match op with
+  | Union -> "Union"
+  | Intersection -> "Intersection"
 
 let set_constraint from ?(v = Right) s1 s2 =
   if is_not_test then () else
@@ -711,6 +729,7 @@ let intersect_lists l1 l2 = List.filter (fun x -> List.memq x l1) l2
 let intersect_lists_assoc l1 l2 = List.filter (fun (x, _) -> List.memq x l1) l2
 (* Checks that l1 is subset of l2 *)
 let subset_lists l1 l2 = List.for_all (fun id -> List.memq id l2) l1
+let exclude_lists l1 l2 = List.filter (fun id -> not @@ List.memq id l2) l1
 
 (* edges = ((edges_var_ub, edges_tag_ub), (edges_var_lb, edges_tag_lb)) *)
 
@@ -800,6 +819,16 @@ let collect_edges () =
   let (_, edges) = collect_edges_ () in
   edges_cache := Some edges; edges
 
+let find_parent id =
+  let rec find_parent_aux copies id =
+    match copies with
+    | [] -> None
+    | (from_id, to_id) :: copies ->
+      if to_id == id
+      then Some from_id
+      else find_parent_aux copies id in
+  find_parent_aux !copies id
+
 let solve_for_ merge (edges_var, edges_tag) id =
   if not (Hashtbl.mem edges_tag id) ||
      not (Hashtbl.mem edges_var id)
@@ -817,16 +846,6 @@ let solve_for_ merge (edges_var, edges_tag) id =
       Option.map (List.sort_uniq String.compare) tags in
     solve_for_aux id
   with Not_found -> raise (Romanv "Not_found in solve_for")
-
-let find_parent id =
-  let rec find_parent_aux copies id =
-    match copies with
-    | [] -> None
-    | (from_id, to_id) :: copies ->
-      if to_id == id
-      then Some from_id
-      else find_parent_aux copies id in
-  find_parent_aux !copies id
 
 let rec solve_for merge edges id =
   let parent_id = find_parent id in
@@ -881,7 +900,144 @@ let solve_set_type id =
   let edges = collect_edges () in
   solve_set_type edges id
 
-let solve_set_type_with_context context row = assert false
+let find_connected ((edges, _), _) =
+  let reachable = Hashtbl.create 17 in
+  let rec calc_reachable used id = (* romanv: fails on cycles *)
+    if Hashtbl.mem used id then [] else begin
+    Hashtbl.add used id ();
+    match Hashtbl.find_opt reachable id with
+    | Some reacheble -> reacheble
+    | None ->
+        let direct = !(Hashtbl.find edges id) in
+        let indirect = List.map (calc_reachable used) direct in
+        let res = uniq (List.append direct (List.concat indirect)) in
+        Hashtbl.add reachable id res; res
+    end
+  in
+  Seq.iter
+    (fun id -> ignore @@ calc_reachable (Hashtbl.create 17) id)
+    (Hashtbl.to_seq_keys edges);
+  let connected = Hashtbl.create 17 in
+  Seq.iter
+    (fun id -> Hashtbl.add connected id [])
+    (Hashtbl.to_seq_keys edges);
+  Hashtbl.iter
+    (fun id1 reachable1 ->
+      List.iter
+        (fun id2 ->
+          let reachable2 = Hashtbl.find reachable id2 in
+          if List.memq id1 reachable2 then
+            let prev = Hashtbl.find connected id1 in
+            Hashtbl.replace connected id1 (id2 :: prev))
+        !reachable1)
+    edges;
+  connected
+
+let transform_edges_ edges connected =
+  let edges = Hashtbl.copy edges in
+  Hashtbl.iter
+    (fun id edg ->
+      let con = Hashtbl.find connected id in
+      edg := exclude_lists !edg con)
+    edges;
+  Hashtbl.iter
+    (fun id edg ->
+      let con = Hashtbl.find connected id in
+      let new_edges =
+        List.concat @@
+        List.map (fun id -> !(Hashtbl.find edges id)) con in
+      edg := uniq @@ List.append new_edges !edg)
+    edges;
+  edges
+
+let transform_edges ((edges_lb, lb'), (edges_ub, ub')) connected =
+  (transform_edges_ edges_lb connected, lb'),
+  (transform_edges_ edges_ub connected, ub')
+
+let solve_for_with_context_ solve_rec merge (edges_var, edges_tag) id =
+  if not (Hashtbl.mem edges_tag id) ||
+     not (Hashtbl.mem edges_var id)
+  then { tags = None; variables = [] } else
+  let v = !(Hashtbl.find edges_var id) in
+  let solutions = List.map solve_rec v in
+  let tagss =
+    let tags = !(Hashtbl.find edges_tag id) in
+    let tags = if tags = [] then None else Some tags in
+    { tags; variables = [] }
+  in
+  List.fold_left merge tagss solutions
+
+let rec solve_for_with_context context merge edges id : set_bound_solution =
+  if List.memq id context then { tags = None; variables = [id] } else
+  let parent_id = find_parent id in
+  let solve_rec = solve_for_with_context context merge edges in
+  match parent_id with
+  | Some parent_id ->
+      let parent_solution = solve_for_with_context context merge edges parent_id in
+      let solution = solve_for_with_context_ solve_rec merge edges id in
+      merge parent_solution solution
+  | None -> solve_for_with_context_ solve_rec merge edges id
+
+let solve_ub_with_context context edges_ub id =
+  let tags_merge old_tags new_tags =
+    match old_tags, new_tags with
+    | None, None -> None
+    | Some t, None | None, Some t -> Some t
+    | Some t1, Some t2 -> Some (intersect_lists t1 t2) in
+  let variables_merge old_variables new_variables =
+    uniq @@ List.append old_variables new_variables in
+  let solutions_merge
+    {tags = old_tags; variables = old_variables}
+    {tags = new_tags; variables = new_variables} =
+    let tags = tags_merge old_tags new_tags in
+    let variables = variables_merge old_variables new_variables in
+    {tags; variables}
+  in
+  solve_for_with_context context solutions_merge edges_ub id
+
+let solve_lb_with_context context edges_lb id =
+  let tags_merge old_tags new_tags =
+    match old_tags, new_tags with
+    | None, None -> None
+    | Some t, None | None, Some t -> Some t
+    | Some t1, Some t2 -> Some (List.append t1 t2) in
+  let variables_merge old_variables new_variables =
+    uniq @@ List.append old_variables new_variables in
+  let solutions_merge
+    {tags = old_tags; variables = old_variables}
+    {tags = new_tags; variables = new_variables} =
+    let tags = tags_merge old_tags new_tags in
+    let variables = variables_merge old_variables new_variables in
+    {tags; variables}
+  in
+  solve_for_with_context context solutions_merge edges_lb id
+
+let solve_set_type_with_context_ context (edges_ub, edges_lb) id =
+  let {tags=ub_tags; variables=ub_variables} = solve_ub_with_context context edges_ub id in
+  let {tags=lb_tags; variables=lb_variables} = solve_lb_with_context context edges_lb id in
+
+  match ub_tags, lb_tags with
+  | Some ub_tags, Some lb_tags when not @@ subset_lists lb_tags ub_tags ->
+      SSFail
+  | _ ->
+      let solution = SSTags (lb_tags, ub_tags) in
+      let solution =
+        List.fold_left
+          (fun solution var -> SSUnion (solution, SSVariable var))
+          solution
+          lb_variables in
+      let solution =
+        List.fold_left
+          (fun solution var -> SSIntersection (solution, SSVariable var))
+          solution
+          ub_variables in
+      solution
+
+let solve_set_type_with_context context row =
+  let edges = collect_edges () in
+  let connected = find_connected edges in (* romanv: connected context *)
+  let edges = transform_edges edges connected in
+  solve_set_type_with_context_ context edges (row_set_id row)
 
 let print_bound b = match b with
 | Some tags -> sprint_tags tags

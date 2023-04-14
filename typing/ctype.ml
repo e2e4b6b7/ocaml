@@ -1258,6 +1258,8 @@ let rec copy_sep ~cleanup_scope ~fixed ~free ~bound ~may_share
           visited
       | Tlink _ | Tsubst _ ->
           assert false
+      | Tsetop _ | Ttags _ ->
+          assert false
     in
     let copy_rec = copy_sep ~cleanup_scope ~fixed ~free ~bound visited in
     let desc' =
@@ -1556,6 +1558,7 @@ let rec extract_concrete_typedecl env ty =
   | Tvariant _ | Tpackage _ -> Has_no_typedecl
   | Tvar _ | Tunivar _ -> May_have_typedecl
   | Tlink _ | Tsubst _ -> assert false
+  | Tsetop _ | Ttags _ -> assert false
 
 (* Implementing function [expand_head_opt], the compiler's own version of
    [expand_head] used for type-based optimisations.
@@ -4232,6 +4235,7 @@ let rec build_subtype env (visited : transient_expr list)
         create_row ~set_data ~fields ~fixed:None ~name:None
       in
       (newty (Tvariant row), Changed)
+  | Tsetop _ | Ttags _ -> assert false
   | Tobject (t1, _) ->
       let tt = Transient_expr.repr t in
       if memq_warn tt visited || opened_object t1 then (t, Unchanged) else
@@ -4895,3 +4899,57 @@ let immediacy env typ =
        Maybe we should emit a warning. *)
     end
   | _ -> Type_immediacy.Unknown
+
+
+let rec solve_type ty = solve_type_context [] ty
+and solve_type_context context ty =
+  let new_context =
+    match get_desc ty with
+    | Tvariant row ->
+        let set_id = row_set_id row in
+        (set_id, ty) :: context
+    | _ -> context
+  in
+  (match get_desc ty with
+  | Tvariant row ->
+      let solution = solve_set_type_with_context (List.map fst context) row in
+      let get_field l = get_row_field l row in
+      let newty = newty3 ~level:(get_level ty) ~scope:(get_scope ty) in
+      let new_ty = build_desc_from_solution get_field newty context solution in
+      set_type_desc ty (get_desc new_ty)
+  | _ -> ());
+  Btype.iter_type_expr (solve_type_context new_context) ty
+
+and build_desc_from_solution get_field newty context solution =
+  let re = build_desc_from_solution get_field newty context in
+  match solution with
+  | SSUnion (l, r) -> newty (Tsetop (Union, re l, re r))
+  | SSIntersection (l, r) -> newty (Tsetop (Intersection, re l, re r))
+  | SSTags (lb, ub) ->
+    begin
+      match lb, ub with
+      | Some lb, Some ub ->
+          newty (
+            Ttags (
+              List.map
+                (fun l ->
+                  (l, List.mem l lb, Option.get @@ get_field l))
+                ub))
+      | None, Some ub ->
+          newty (
+            Ttags (
+              List.map
+                (fun l ->
+                  (l, false, Option.get @@ get_field l))
+                ub))
+      | Some lb, None ->
+          newty (
+            Ttags (
+              List.map
+                (fun l ->
+                  (l, true, Option.get @@ get_field l))
+                lb))
+      | None, None -> newty (Ttags [])
+    end
+  | SSVariable id -> List.assq id context
+  | SSFail -> assert false

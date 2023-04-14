@@ -321,6 +321,7 @@ and print_simple_out_type ppf =
          else if tags = None then "> " else "? ")
         print_fields row_fields
         print_present tags
+  | Otyp_setop (op, l, r) -> fprintf ppf "%a %s %a" print_out_type l op print_out_type r
   | Otyp_alias _ | Otyp_poly _ | Otyp_arrow _ | Otyp_tuple _ as ty ->
       pp_open_box ppf 1;
       pp_print_char ppf '(';
