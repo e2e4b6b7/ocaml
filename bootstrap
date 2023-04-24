@@ -6,16 +6,16 @@
 git checkout 4.14 || exit
 git checkout HEAD -- boot || exit
 ##########################################
-make partialclean -j 7 || exit
+make partialclean -j || exit
 ### or
-# make clean -j 7 || exit
-# ./configure CC=clang CFLAGS="-Wno-strict-prototypes -Wno-unused-but-set-variable" || exit
+# make clean -j || exit
+# ./configure CC=gcc CFLAGS="-Wno-strict-prototypes -Wno-unused-but-set-variable" || exit
 ##########################################
-make world.opt -j 7 || exit
+make world.opt -j || exit
 
 git checkout constraints || exit
-make coreall -j 7 || exit
-make bootstrap -j 7 || exit
-make -j 7 || exit
+make coreall -j || exit
+make bootstrap -j || exit
+make -j || exit
 
 ./clean

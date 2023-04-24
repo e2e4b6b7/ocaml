@@ -72,8 +72,7 @@ type out_type =
   | Otyp_sum of out_constructor list
   | Otyp_tuple of out_type list
   | Otyp_var of bool * string
-  | Otyp_variant of
-      string * bool * out_variant * bool * (string list) option
+  | Otyp_variant of string * (string * out_type option) list
   | Otyp_setop of string * out_type * out_type
   | Otyp_poly of string list * out_type
   | Otyp_module of out_ident * (string * out_type) list
@@ -84,10 +83,6 @@ and out_constructor = {
   ocstr_args: out_type list;
   ocstr_return_type: out_type option;
 }
-
-and out_variant =
-  | Ovar_fields of (string * bool * out_type list) list
-  | Ovar_typ of out_type
 
 type out_class_type =
   | Octy_constr of out_ident * out_type list

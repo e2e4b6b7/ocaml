@@ -317,7 +317,7 @@ val compare_type: type_expr -> type_expr -> int
 *)
 
 type set_data
-type set_id
+type set_id = int ref
 
 type set_solution =
   | SSUnion of set_solution * set_solution

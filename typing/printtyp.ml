@@ -544,7 +544,12 @@ and raw_type_desc ppf = function
               fprintf ppf "Some(@,%a,@,%a)" path p raw_type_list tl)
   | Tsetop (op, l, r) ->
       fprintf ppf "@[<1>Tsetop@,%s@,%a@,%a@]" (setop_name op) raw_type l raw_type r
-  | Ttags _ -> assert false
+  | Ttags desc ->
+      fprintf ppf
+        "@[%a@]"
+        (raw_list (fun ppf (l, b, f) ->
+          fprintf ppf "@[%s, %b,@ %a@]" l b raw_field f))
+        desc
   | Tpackage (p, fl) ->
       fprintf ppf "@[<hov1>Tpackage(@,%a@,%a)@]" path p
         raw_type_list (List.map snd fl)
@@ -1002,7 +1007,6 @@ let aliasable ty =
 
 let should_visit_object ty =
   match get_desc ty with
-  | Tvariant row -> not (static_row row)
   | Tobject _ -> opened_object ty
   | _ -> false
 
@@ -1012,7 +1016,7 @@ let rec mark_loops_rec visited ty =
     let tty = Transient_expr.repr ty in
     let visited = px :: visited in
     match tty.desc with
-    | Tvariant _ | Tobject _ ->
+    | Tobject _ ->
       if List.memq px !visited_objects then add_alias_proxy px else begin
         (* romanv: proxy (`as` type in output) creates here ^ *)
         if should_visit_object ty then
@@ -1029,7 +1033,6 @@ let mark_loops ty =
   mark_loops_rec [] ty;;
 
 let prepare_type ty =
-  solve_type ty;
   reserve_names ty;
   mark_loops ty;;
 
@@ -1052,7 +1055,69 @@ let add_type_to_preparation = prepare_type
 (* Disabled in classic mode when printing an unification error *)
 let print_labels = ref true
 
-let rec tree_of_typexp mode ty =
+type set_solution =
+  | PSUnion of set_solution * set_solution
+  | PSIntersection of set_solution * set_solution
+  | PSVariable of set_id
+  | PSTags of
+      (string * type_expr option) list option * (* lb *)
+      (string * type_expr option) list option   (* ub *)
+
+module RefHashtbl = Hashtbl.Make(struct
+  type t = int ref
+  let equal = (==)
+  let hash = Hashtbl.hash
+end)
+
+let rec transform_solution get_field context solution =
+  let re = transform_solution get_field context in
+  match solution with
+  | SSVariable id -> PSVariable id
+  | SSTags (lb, ub) -> PSTags (
+      Option.map (List.map (fun l -> l, get_field l)) lb,
+      Option.map (List.map (fun l -> l, get_field l)) ub)
+  | SSUnion (l, r) -> PSUnion (re l, re r)
+  | SSIntersection (l, r) -> PSIntersection (re l, re r)
+  | SSFail -> assert false
+
+let rec iter_variables f solution =
+  match solution with
+  | PSTags _ -> ()
+  | PSVariable id -> f id
+  | PSUnion (l, r) -> iter_variables f l; iter_variables f r
+  | PSIntersection (l, r) -> iter_variables f l; iter_variables f r
+
+let solve_types ty =
+  let solutions = Hashtbl.create 17 in
+  let used_variables = RefHashtbl.create 17 in
+  let context = ref [] in
+  let visited = Hashtbl.create 13 in
+  let rec solve_type_context ty =
+    if Hashtbl.mem visited (get_id ty) then () else begin
+    Hashtbl.add visited (get_id ty) ();
+    let set_id =
+      match get_desc ty with
+      | Tvariant row -> Some (row_set_id row)
+      | _ -> None
+    in
+    (match get_desc ty with
+    | Tvariant row ->
+        let solution = solve_set_type_with_context (List.map fst !context) row in
+        let get_field l = assert ((get_row_field l row) <> None); Option.get (get_row_field l row) in
+        let solved_ty = transform_solution get_field context solution in
+        iter_variables (fun id -> RefHashtbl.add used_variables id None) solved_ty;
+        Hashtbl.add solutions (get_id ty) solved_ty
+    | _ -> ());
+    (match set_id with
+    | Some set_id ->
+        context := (set_id, ty) :: !context
+    | None -> ());
+    Btype.iter_type_expr solve_type_context ty
+    end in
+  solve_type_context ty;
+  solutions, used_variables
+
+let rec tree_of_typexp_ ((solutions, used_variables) as c) mode ty =
   let px = proxy ty in
   if List.memq px !printed_aliases && not (List.memq px !delayed) then
    let mark = is_non_gen mode ty in
@@ -1080,85 +1145,54 @@ let rec tree_of_typexp mode ty =
             match get_desc ty1 with
             | Tconstr(path, [ty], _)
               when Path.same path Predef.path_option ->
-                tree_of_typexp mode ty
+                tree_of_typexp_ c mode ty
             | _ -> Otyp_stuff "<hidden>"
-          else tree_of_typexp mode ty1 in
-        Otyp_arrow (lab, t1, tree_of_typexp mode ty2)
+          else tree_of_typexp_ c mode ty1 in
+        Otyp_arrow (lab, t1, tree_of_typexp_ c mode ty2)
     | Ttuple tyl ->
-        Otyp_tuple (tree_of_typlist mode tyl)
+        Otyp_tuple (tree_of_typlist c mode tyl)
     | Tconstr(p, tyl, _abbrev) ->
         let p', s = best_type_path p in
         let tyl' = apply_subst s tyl in
         if is_nth s && not (tyl'=[])
-        then tree_of_typexp mode (List.hd tyl')
-        else Otyp_constr (tree_of_path Type p', tree_of_typlist mode tyl')
+        then tree_of_typexp_ c mode (List.hd tyl')
+        else Otyp_constr (tree_of_path Type p', tree_of_typlist c mode tyl')
     | Tvariant row ->
-        let Row {fields; name} = row_repr row in
-        let present = fields in
-        let all_present = List.length present = List.length fields in
-        begin match name with
-        | Some(p, tyl) when nameable_row row ->
-            let (p', s) = best_type_path p in
-            let id = tree_of_path Type p' in
-            let args = tree_of_typlist mode (apply_subst s tyl) in
-            let out_variant =
-              if is_nth s then List.hd args else Otyp_constr (id, args) in
-            if all_present then
-              out_variant
-            else
-              let non_gen = is_non_gen mode (Transient_expr.type_expr px) in
-              let tags =
-                if all_present then None else Some (List.map fst present) in
-              Otyp_variant (sprint_set_type row, non_gen, Ovar_typ out_variant, true, tags)
-        | _ ->
-            let non_gen =
-              not (all_present) &&
-              is_non_gen mode (Transient_expr.type_expr px) in
-            let fields = List.map (tree_of_row_field mode) fields in
-            let tags =
-              if all_present then None else Some (List.map fst present) in
-            Otyp_variant (sprint_set_type row, non_gen, Ovar_fields fields, true, tags)
-        end
-    | Ttags desc ->
-        let tags = List.map fst3 desc in
-        let fields =
-          List.map
-            (fun (l, r, ty) ->
-              (l, r, Option.to_list @@ Option.map (tree_of_typexp mode) ty))
-            desc
-        in
-        let str = if List.length desc == 1 then "T" else "" in
-        Otyp_variant (str, false, Ovar_fields fields, true, Some tags)
-    | Tsetop (op, l, r) ->
-        let op_str =
-          match op with
-          | Union -> "|"
-          | Intersection -> "&"
-        in
-        Otyp_setop (op_str, tree_of_typexp mode l, tree_of_typexp mode r)
+        let set_id = row_set_id row in
+        let used = RefHashtbl.mem used_variables set_id in
+        let solution = Hashtbl.find solutions (tty.id) in
+        let tree = tree_of_set_solution (sprint_set_type row) c mode solution in
+        if used then begin
+          assert (RefHashtbl.find used_variables set_id = None);
+          let name = Names.new_name () in
+          RefHashtbl.replace used_variables set_id (Some (Otyp_var (true, name)));
+          Otyp_alias (tree, name)
+        end else tree
+    | Ttags _ -> assert false
+    | Tsetop _ -> assert false
     | Tobject (fi, nm) ->
-        tree_of_typobject mode fi !nm
+        tree_of_typobject c mode fi !nm
     | Tnil | Tfield _ ->
-        tree_of_typobject mode ty None
+        tree_of_typobject c mode ty None
     | Tsubst _ ->
         (* This case should only happen when debugging the compiler *)
         Otyp_stuff "<Tsubst>"
     | Tlink _ ->
         fatal_error "Printtyp.tree_of_typexp"
     | Tpoly (ty, []) ->
-        tree_of_typexp mode ty
+        tree_of_typexp_ c mode ty
     | Tpoly (ty, tyl) ->
         (*let print_names () =
           List.iter (fun (_, name) -> prerr_string (name ^ " ")) !names;
           prerr_string "; " in *)
-        if tyl = [] then tree_of_typexp mode ty else begin
+        if tyl = [] then tree_of_typexp_ c mode ty else begin
           let tyl = List.map Transient_expr.repr tyl in
           let old_delayed = !delayed in
           (* Make the names delayed, so that the real type is
              printed once when used as proxy *)
           List.iter add_delayed tyl;
           let tl = List.map (Names.name_of_type Names.new_name) tyl in
-          let tr = Otyp_poly (tl, tree_of_typexp mode ty) in
+          let tr = Otyp_poly (tl, tree_of_typexp_ c mode ty) in
           (* Forget names when we leave scope *)
           Names.remove_names tyl;
           delayed := old_delayed; tr
@@ -1170,7 +1204,7 @@ let rec tree_of_typexp mode ty =
           List.map
             (fun (li, ty) -> (
               String.concat "." (Longident.flatten li),
-              tree_of_typexp mode ty
+              tree_of_typexp_ c mode ty
             )) fl in
         Otyp_module (tree_of_path Module_type p, fl)
   in
@@ -1180,15 +1214,33 @@ let rec tree_of_typexp mode ty =
     Otyp_alias (pr_typ (), Names.name_of_type Names.new_name px) end
   else pr_typ ()
 
-and tree_of_row_field mode (l, oty) =
-  match oty with
-  | None -> (l, false, [])
-  | Some ty -> (l, false, [tree_of_typexp mode ty])
+and tree_of_set_solution d ((_, used_variables) as c) mode solution =
+  match solution with
+  | PSTags (lb, ub) ->
+      let fields =
+        match lb, ub with
+        | _, Some ub -> ub
+        | Some lb, None -> lb
+        | None, None -> []
+      in
+      let fields =
+        List.map
+        (fun (l, ty) ->
+          l, Option.map (tree_of_typexp_ c mode) ty)
+        fields
+      in
+      Otyp_variant (d, fields)
+  | PSVariable id ->
+      (match RefHashtbl.find used_variables id with
+      | Some tree -> tree
+      | None -> assert false)
+  | PSIntersection (l, r) -> Otyp_setop ("&", tree_of_set_solution d c mode l, tree_of_set_solution d c mode r)
+  | PSUnion (l, r) -> Otyp_setop ("|", tree_of_set_solution d c mode l, tree_of_set_solution d c mode r)
 
-and tree_of_typlist mode tyl =
-  List.map (tree_of_typexp mode) tyl
+and tree_of_typlist c mode tyl =
+  List.map (tree_of_typexp_ c mode) tyl
 
-and tree_of_typobject mode fi nm =
+and tree_of_typobject c mode fi nm =
   begin match nm with
   | None ->
       let pr_fields fi =
@@ -1203,12 +1255,12 @@ and tree_of_typobject mode fi nm =
         let sorted_fields =
           List.sort
             (fun (n, _) (n', _) -> String.compare n n') present_fields in
-        tree_of_typfields mode rest sorted_fields in
+        tree_of_typfields c mode rest sorted_fields in
       let (fields, rest) = pr_fields fi in
       Otyp_object (fields, rest)
   | Some (p, ty :: tyl) ->
       let non_gen = is_non_gen mode ty in
-      let args = tree_of_typlist mode tyl in
+      let args = tree_of_typlist c mode tyl in
       let (p', s) = best_type_path p in
       assert (s = Id);
       Otyp_class (non_gen, tree_of_path Type p', args)
@@ -1216,7 +1268,7 @@ and tree_of_typobject mode fi nm =
       fatal_error "Printtyp.tree_of_typobject"
   end
 
-and tree_of_typfields mode rest = function
+and tree_of_typfields c mode rest = function
   | [] ->
       let rest =
         match get_desc rest with
@@ -1227,9 +1279,16 @@ and tree_of_typfields mode rest = function
       in
       ([], rest)
   | (s, t) :: l ->
-      let field = (s, tree_of_typexp mode t) in
-      let (fields, rest) = tree_of_typfields mode rest l in
+      let field = (s, tree_of_typexp_ c mode t) in
+      let (fields, rest) = tree_of_typfields c mode rest l in
       (field :: fields, rest)
+
+let tree_of_typexp mode ty =
+  let c = solve_types ty in
+  tree_of_typexp_ c mode ty
+
+let tree_of_typlist mode tyl =
+  List.map (tree_of_typexp mode) tyl
 
 let typexp mode ppf ty =
   !Oprint.out_type ppf (tree_of_typexp mode ty)

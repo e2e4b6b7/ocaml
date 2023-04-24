@@ -61,7 +61,7 @@ and set_data =
 and set_variance = Left | Right | Unknown
 
 and row_desc =
-    { mutable row_fields: (label * type_expr option) list;
+    { mutable row_fields: (label * type_expr option) list ref;
       row_fixed: fixed_explanation option;
       row_name: (Path.t * type_expr list) option;
       set_data: set_data }
@@ -611,6 +611,20 @@ let file =
   file
 
 let copies = ref []
+let strace_copies id =
+  let rec trace_copies_aux copies id =
+    match copies with
+    | [] -> "", id
+    | (from_id, to_id) :: copies ->
+        if to_id == id
+        then
+          let trace, init_id = trace_copies_aux copies from_id in
+          Printf.sprintf "%d <- %s" !id trace, init_id
+        else trace_copies_aux copies id in
+  let trace, id = trace_copies_aux !copies id in
+  if trace = ""
+    then Printf.sprintf "%d" !id
+    else Printf.sprintf "%s%d\n" trace !id
 let trace_copies id =
   let rec trace_copies_aux copies id =
     match copies with
@@ -725,11 +739,11 @@ let cp_set_data from row =
 
 let sprint_tags tags = String.concat "" ["[";String.concat "," tags;"]"]
 
-let intersect_lists l1 l2 = List.filter (fun x -> List.memq x l1) l2
-let intersect_lists_assoc l1 l2 = List.filter (fun (x, _) -> List.memq x l1) l2
+let intersect_lists l1 l2 = List.filter (fun x -> List.mem x l1) l2
+let intersect_lists_assoc l1 l2 = List.filter (fun (x, _) -> List.mem x l1) l2
 (* Checks that l1 is subset of l2 *)
-let subset_lists l1 l2 = List.for_all (fun id -> List.memq id l2) l1
-let exclude_lists l1 l2 = List.filter (fun id -> not @@ List.memq id l2) l1
+let subset_lists l1 l2 = List.for_all (fun id -> List.mem id l2) l1
+let exclude_listsq l1 l2 = List.filter (fun id -> not @@ List.memq id l2) l1
 
 (* edges = ((edges_var_ub, edges_tag_ub), (edges_var_lb, edges_tag_lb)) *)
 
@@ -891,7 +905,7 @@ let solve_set_type (edges_ub, edges_lb) id =
   | Some ub_tags, Some lb_tags ->
           if subset_lists lb_tags ub_tags
             then SSTags (Some lb_tags, Some ub_tags)
-            else SSFail
+            else assert false
   | Some ub_tags, None -> SSTags (None, Some ub_tags)
   | None, Some lb_tags -> SSTags (Some lb_tags, None)
   | None, None -> SSTags (None, None)
@@ -938,7 +952,7 @@ let transform_edges_ edges connected =
   Hashtbl.iter
     (fun id edg ->
       let con = Hashtbl.find connected id in
-      edg := exclude_lists !edg con)
+      edg := exclude_listsq !edg con)
     edges;
   Hashtbl.iter
     (fun id edg ->
@@ -968,6 +982,7 @@ let solve_for_with_context_ solve_rec merge (edges_var, edges_tag) id =
   List.fold_left merge tagss solutions
 
 let rec solve_for_with_context context merge edges id : set_bound_solution =
+  Printf.fprintf file "in %d;" !id;
   if List.memq id context then { tags = None; variables = [id] } else
   let parent_id = find_parent id in
   let solve_rec = solve_for_with_context context merge edges in
@@ -1013,12 +1028,15 @@ let solve_lb_with_context context edges_lb id =
   solve_for_with_context context solutions_merge edges_lb id
 
 let solve_set_type_with_context_ context (edges_ub, edges_lb) id =
+  if List.memq id context then SSVariable id else begin
   let {tags=ub_tags; variables=ub_variables} = solve_ub_with_context context edges_ub id in
   let {tags=lb_tags; variables=lb_variables} = solve_lb_with_context context edges_lb id in
 
   match ub_tags, lb_tags with
   | Some ub_tags, Some lb_tags when not @@ subset_lists lb_tags ub_tags ->
-      SSFail
+      Printf.fprintf file "FAIL: %s; %s\n" (sprint_tags ub_tags) (sprint_tags lb_tags);
+      flush file;
+      assert false
   | _ ->
       let solution = SSTags (lb_tags, ub_tags) in
       let solution =
@@ -1032,11 +1050,16 @@ let solve_set_type_with_context_ context (edges_ub, edges_lb) id =
           solution
           ub_variables in
       solution
+    end
 
 let solve_set_type_with_context context row =
+  Printf.fprintf file "\nContext: %d" (List.length context);
+  List.iter (fun id -> Printf.fprintf file " %d" !id) context;
+  Printf.fprintf file "\n";
   let edges = collect_edges () in
   let connected = find_connected edges in (* romanv: connected context *)
   let edges = transform_edges edges connected in
+  flush file;
   solve_set_type_with_context_ context edges (row_set_id row)
 
 let print_bound b = match b with
@@ -1046,14 +1069,8 @@ let print_bound b = match b with
 let sprint_set_type row =
   let data = row.set_data in
   match data with
-  | STags (from, tags) -> Printf.sprintf "%s: %s" from (sprint_tags tags)
-  | SVar (from, id) ->
-      let solution = solve_set_type id in
-      Printf.sprintf "%d, %s: %s" !id from (match solution with
-      | SSTags (lb, ub) ->
-          Printf.sprintf "[< %s > %s]" (print_bound lb) (print_bound ub)
-      | SSFail -> "Fail"
-      | _ -> assert false)
+  | STags _ -> "Tags..."
+  | SVar (from, id) -> Printf.sprintf "%s from %s" (strace_copies id) from
   | SUnknown from -> Printf.sprintf "Unknown from %s" from
   | STop -> "T"
 
@@ -1066,26 +1083,27 @@ let row_fields row =
   match row.set_data with
   | SVar (_, id) ->
       let (edges, _) = collect_edges () in
-      let fields = row.row_fields in
+      let fields = !(row.row_fields) in
       let ub = solve_ub edges id in
       (match ub with
       | Some tags -> intersect_lists_assoc tags fields
       | None -> fields)
-  | SUnknown _ -> row.row_fields
-  | STags (_, tags) -> intersect_lists_assoc tags row.row_fields
-  | STop -> row.row_fields
+  | SUnknown _ -> !(row.row_fields)
+  | STags _ -> raise (Romanv "1")
+  | _ -> raise (Romanv "2")
 
 let row_fields_lb row =
   match row.set_data with
   | SVar (_, id) ->
       let (_, edges) = collect_edges () in
-      let fields = row.row_fields in
+      let fields = !(row.row_fields) in
       let lb = solve_lb edges id in
       (match lb with
       | Some tags -> intersect_lists_assoc tags fields
       | None -> fields)
-  | SUnknown _ -> row.row_fields
-  | _ -> assert false
+  | SUnknown _ -> !(row.row_fields)
+  | STags _ -> raise (Romanv "3")
+  | _ -> raise (Romanv "4")
 
 let row_repr_no_fields row = row
 
@@ -1109,7 +1127,7 @@ let dump tag row =
   | Some (path, _) ->
       Printf.fprintf file "Name: %s\n" (Path.name path)
   | None -> ();
-  Printf.fprintf file "Tags: %s\n" (sprint_tags (List.map fst row.row_fields));
+  Printf.fprintf file "Tags: %s\n" (sprint_tags (List.map fst !(row.row_fields)));
   Printf.fprintf file "Inferred tags: %s\n" (sprint_set_type row);
   Printf.fprintf file "Searching for tag: %s\n" tag
 
@@ -1118,7 +1136,7 @@ let get_row_field_ tag row =
     | (tag',f) :: fields ->
         if tag = tag' then Some f else find fields
     | [] -> None
-  in find row.row_fields
+  in find !(row.row_fields)
 
 let get_row_field ?d tag row =
   match d with
@@ -1133,9 +1151,7 @@ let set_row_fields row fields =
   row.row_fields <- fields
 
 let set_row_name row row_name =
-  let row_fields = row_fields row in
-  let row = row_repr_no_fields row in
-  {row with row_fields; row_name}
+  { row with row_name }
 
 type row_desc_repr =
     Row of { fields: (label * type_expr option) list;
@@ -1252,6 +1268,25 @@ let undo_change = function
 type snapshot = changes ref * int
 let last_snapshot = Local_store.s_ref 0
 
+let sprint_desc = function
+  | Tarrow _ -> "Tarrow"
+  | Tvariant _ -> "Tvariant"
+  | Tvar _ -> "Tvar"
+  | Tunivar _ -> "Tunivar"
+  | Tconstr _ -> "Tconstr"
+  | Tfield _ -> "Tfield"
+  | Tlink _ -> "Tlink"
+  | Tobject _ -> "Tobject"
+  | Tpackage _ -> "Tpackage"
+  | Tnil -> "Tnil"
+  | Ttuple _ -> "Ttuple"
+  | Tpoly _ -> "Tpoly"
+  | Tsubst _ -> "Tsubst"
+  | _ -> assert false
+
+let dump_link ty ty' =
+  Printf.fprintf file "link_type: %s - %s\n" (sprint_desc ty.desc) (sprint_desc ty'.desc)
+
 let log_type ty =
   if ty.id <= !last_snapshot then log_change (Ctype (ty, ty.desc))
 let link_type_ ty ty' =
@@ -1278,8 +1313,18 @@ let link_type ty ty' =
   let ty = repr ty in
   let ty' = repr ty' in
   if ty == ty' then () else
+  (* dump_link ty ty'; *)
   match ty.desc, ty'.desc with
   | Tvariant _, Tvariant _ -> ()
+  | Tvar _, Tvariant _ ->
+      Transient_expr.set_desc ty
+        (Tvariant (
+          create_row
+            ~set_data:(mk_set_var "link_type")
+            ~fields:(ref [])
+            ~fixed:None
+            ~name:None));
+  | Tvariant _, Tvar _ -> assert false
   | _ -> link_type_ ty ty'
 (* TODO: consider eliminating set_type_desc, replacing it with link types *)
 let set_type_desc ty td =

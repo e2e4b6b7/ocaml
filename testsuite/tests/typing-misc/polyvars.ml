@@ -10,6 +10,10 @@
    | `C :: _ -> List.hd y
    | [] -> `B;; *)
 
+let id2 x = match x with `A | `B -> x;;
+
+let lst = [id2 `A; `C];;
+
 let f1 y =
    match y with
    | `A -> `C
@@ -71,7 +75,7 @@ let tmp = f1 `C;;
 [%%expect {|
 |}]
 
-let id2 x = match x with `A | `B -> x;;
+
 [%%expect {|
 |}]
 

@@ -427,8 +427,8 @@ let rec copy_type_desc ?(keep_names=false) f = function
                         -> Tobject (f ty, ref (Some(p, List.map f tl)))
   | Tobject (ty, _)     -> Tobject (f ty, ref None)
   | Tvariant _          -> assert false (* too ambiguous *)
-  | Ttags _
-  | Tsetop _            -> assert false
+  | Ttags desc          -> Ttags (List.map (fun (l, b, ty) -> l, b, Option.map f ty) desc)
+  | Tsetop (op, l, r)   -> Tsetop (op, f l, f r)
   | Tfield (p, k, ty1, ty2) ->
       Tfield (p, field_kind_internal_repr k, f ty1, f ty2)
       (* the kind is kept shared, with indirections removed for performance *)

@@ -2841,12 +2841,12 @@ and unify_row env row1 row2 =
       match t1, t2 with
       | None, None -> ()
       | Some _, None | None, Some _ ->
-        (Printf.printf "\n\nFailure 2\n\n";
+        (Printf.printf "\n\nFailure 2\n\n"; flush stdout;
           raise_for Unify (Variant (Incompatible_types_for tag)))
       | Some t1, Some t2 ->
           try unify env t1 t2
           with Unify_trace trace ->
-            (Printf.printf "\n\nFailure 1\n\n";
+            (Printf.printf "\n\nFailure 1\n\n"; flush stdout;
             raise_trace_for
               Unify (Variant (Incompatible_types_for tag) :: trace)))
     pairs;
@@ -4901,24 +4901,41 @@ let immediacy env typ =
   | _ -> Type_immediacy.Unknown
 
 
-let rec solve_type ty = solve_type_context [] ty
-and solve_type_context context ty =
-  let new_context =
-    match get_desc ty with
+let rec solve_type ty =
+  let context = ref [] in
+  let visited = Hashtbl.create 13 in
+  let rec solve_type_context ty =
+    if Hashtbl.mem visited (get_id ty) then () else begin
+    Hashtbl.add visited (get_id ty) ();
+    let set_id =
+      match get_desc ty with
+      | Tvariant row -> Some (row_set_id row)
+      | _ -> None
+    in
+    (match get_desc ty with
     | Tvariant row ->
-        let set_id = row_set_id row in
-        (set_id, ty) :: context
-    | _ -> context
-  in
-  (match get_desc ty with
-  | Tvariant row ->
-      let solution = solve_set_type_with_context (List.map fst context) row in
-      let get_field l = get_row_field l row in
-      let newty = newty3 ~level:(get_level ty) ~scope:(get_scope ty) in
-      let new_ty = build_desc_from_solution get_field newty context solution in
-      set_type_desc ty (get_desc new_ty)
-  | _ -> ());
-  Btype.iter_type_expr (solve_type_context new_context) ty
+        let solution = solve_set_type_with_context (List.map fst !context) row in
+        Printf.printf "%s\n" (dump_solution solution);
+        let get_field l = get_row_field l row in
+        let newty = newty3 ~level:(get_level ty) ~scope:(get_scope ty) in
+        let new_ty = build_desc_from_solution get_field newty context solution in
+        set_type_desc ty (get_desc new_ty)
+    | _ -> ());
+    (match set_id with
+    | Some set_id ->
+        context := (set_id, ty) :: !context
+    | None -> ());
+    Btype.iter_type_expr solve_type_context ty
+    end in
+  solve_type_context ty
+
+and dump_solution solution : string =
+  match solution with
+  | SSUnion (l, r) -> Printf.sprintf "%s | %s" (dump_solution l) (dump_solution r)
+  | SSIntersection (l, r) -> Printf.sprintf "%s & %s" (dump_solution l) (dump_solution r)
+  | SSTags (_, _) -> "Tags..."
+  | SSVariable _ -> "Var"
+  | SSFail -> "Fail"
 
 and build_desc_from_solution get_field newty context solution =
   let re = build_desc_from_solution get_field newty context in
@@ -4951,5 +4968,5 @@ and build_desc_from_solution get_field newty context solution =
                 lb))
       | None, None -> newty (Ttags [])
     end
-  | SSVariable id -> List.assq id context
+  | SSVariable id -> List.assq id !context
   | SSFail -> assert false

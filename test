@@ -1,9 +1,9 @@
 #!/bin/bash
 # romanv automation script
 
-make -j 7 || exit
-make ocamlc || exit
-make ocamlopt || exit
+make -j || exit
+make ocamlc -j || exit
+make ocamlopt -j || exit
 
 cd testsuite
 
