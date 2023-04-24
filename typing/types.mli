@@ -353,9 +353,8 @@ val solve_set_type_with_context: set_id list -> row_desc -> set_solution
 
 val create_row:
   set_data: set_data ->
-  fields:(label * type_expr option) list ->
-  fixed:fixed_explanation option ->
-  name:(Path.t * type_expr list) option -> row_desc
+  fixed: fixed_explanation option ->
+  name: (Path.t * type_expr list) option -> row_desc
 
 val row_fields: row_desc -> (label * type_expr option) list
 val row_fields_lb: row_desc -> (label * type_expr option) list
@@ -366,7 +365,7 @@ val row_closed: row_desc -> bool
 val set_row_name: row_desc -> (Path.t * type_expr list) option -> row_desc
 val set_row_fields: row_desc -> (label * type_expr option) list -> unit
 
-val get_row_field: ?d:bool -> label -> row_desc -> type_expr option option
+val get_row_field: label -> row_desc -> type_expr option option
 
 (** get all fields at once; different from the old [row_repr] *)
 type row_desc_repr =
@@ -376,34 +375,6 @@ type row_desc_repr =
              name:   (Path.t * type_expr list) option }
 
 val row_repr: row_desc -> row_desc_repr
-
-(** Current contents of a row field *)
-type row_field_view =
-    Rpresent of type_expr option
-  | Reither of bool * type_expr list * bool
-        (* 1st true denotes a constant constructor *)
-        (* 2nd true denotes a tag in a pattern matching, and
-           is erased later *)
-  | Rabsent
-
-val row_field_repr: row_field -> row_field_view
-val rf_present: type_expr option -> row_field
-val rf_absent: row_field
-val rf_either:
-    ?use_ext_of:row_field ->
-    no_arg:bool -> type_expr list -> matched:bool -> row_field
-val rf_either_of: type_expr option -> row_field
-
-val eq_row_field_ext: row_field -> row_field -> bool
-val changed_row_field_exts: row_field list -> (unit -> unit) -> bool
-
-val match_row_field:
-    present:(type_expr option -> 'a) ->
-    absent:(unit -> 'a) ->
-    either:(bool -> type_expr list -> bool -> row_field option ->'a) ->
-    row_field -> 'a
-
-(* *)
 
 module Uid = Shape.Uid
 
