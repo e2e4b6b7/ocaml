@@ -115,8 +115,6 @@ let classify env ty =
       Addr
   | Tlink _ | Tsubst _ | Tpoly _ | Tfield _ ->
       assert false
-  | Tsetop _ | Ttags _ ->
-      assert false
 
 let array_type_kind env ty =
   match scrape_poly env ty with

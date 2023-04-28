@@ -221,12 +221,12 @@ let set_static_row_name decl path =
 let fold_row f init row =
   let result =
     List.fold_left
-      (fun init (_, fi) ->
-         match fi with
+      (fun init (_, ty) ->
+         match ty with
          | Some ty -> f init ty
          | None -> init)
       init
-      (row_fields row)
+      (row_kind row)
   in
   match
     Option.map (fun (_,l) -> List.fold_left f result l) (row_name row)
@@ -251,16 +251,6 @@ let fold_type_expr f init ty =
   | Tobject (ty, _)     -> f init ty
   | Tvariant row        ->
       fold_row f init row
-  | Tsetop (_, l, r) ->
-      f (f init l) r
-  | Ttags tags ->
-      List.fold_left
-        (fun acc (_, _, ty) ->
-          match ty with
-          | Some ty -> f acc ty
-          | None -> acc)
-        init
-        tags
   | Tfield (_, _, ty1, ty2) ->
       let result = f init ty1 in
       f result ty2
@@ -402,20 +392,6 @@ let type_iterators =
     it_modtype_declaration; it_module_declaration; it_extension_constructor;
     it_type_declaration; it_value_description; it_signature_item; }
 
-let copy_row f fixed row =
-  let Row {fields = orig_fields; fixed = orig_fixed; name = orig_name} =
-    row_repr row in
-  let fields = List.map
-      (fun (l, oty) -> l, Option.map f oty)
-      orig_fields in
-  let name =
-    match orig_name with
-    | None -> None
-    | Some (path, tl) -> Some (path, List.map f tl) in
-  let fixed = if fixed then orig_fixed else None in
-  let set_data = cp_set_data "copy_row" row in
-  create_row ~set_data ~fields ~fixed ~name
-
 let copy_commu c = if is_commu_ok c then commu_ok else commu_var ()
 
 let rec copy_type_desc ?(keep_names=false) f = function
@@ -427,8 +403,6 @@ let rec copy_type_desc ?(keep_names=false) f = function
                         -> Tobject (f ty, ref (Some(p, List.map f tl)))
   | Tobject (ty, _)     -> Tobject (f ty, ref None)
   | Tvariant _          -> assert false (* too ambiguous *)
-  | Ttags desc          -> Ttags (List.map (fun (l, b, ty) -> l, b, Option.map f ty) desc)
-  | Tsetop (op, l, r)   -> Tsetop (op, f l, f r)
   | Tfield (p, k, ty1, ty2) ->
       Tfield (p, field_kind_internal_repr k, f ty1, f ty2)
       (* the kind is kept shared, with indirections removed for performance *)
@@ -448,11 +422,15 @@ module For_copy : sig
 
   val redirect_desc: copy_scope -> type_expr -> type_desc -> unit
 
+  val register_row_copy: copy_scope -> row_desc -> row_desc -> unit
+
   val with_scope: (copy_scope -> 'a) -> 'a
 end = struct
   type copy_scope = {
     mutable saved_desc : (transient_expr * type_desc) list;
     (* Save association of generic nodes with their description. *)
+    mutable copied_rows : (row_desc * row_desc) list;
+    (** Pairs of copied types of polymorphic variants. (from, to) *)
   }
 
   let redirect_desc copy_scope ty desc =
@@ -460,16 +438,31 @@ end = struct
     copy_scope.saved_desc <- (ty, ty.desc) :: copy_scope.saved_desc;
     Transient_expr.set_desc ty desc
 
+  let register_row_copy copy_scope from to_ =
+    copy_scope.copied_rows <- (from, to_) :: copy_scope.copied_rows
+
   (* Restore type descriptions. *)
   let cleanup { saved_desc; _ } =
     List.iter (fun (ty, desc) -> Transient_expr.set_desc ty desc) saved_desc
 
+  let copy_row_constraints { copied_rows; _ } = cp_rows copied_rows
+
   let with_scope f =
-    let scope = { saved_desc = [] } in
+    let scope = { saved_desc = []; copied_rows = [] } in
     let res = f scope in
     cleanup scope;
+    copy_row_constraints scope;
     res
 end
+
+let copy_row scope f fixed row =
+  let Row {kind; fixed = orig_fixed; name} = row_repr row in
+  let kind = List.map (fun (l, oty) -> l, Option.map f oty) kind in
+  let name = Option.map (fun (path, tl) -> path, List.map f tl) name in
+  let fixed = if fixed then orig_fixed else None in
+  let new_row = create_row ~from:"copy_row" ~kind ~fixed ~name in
+  For_copy.register_row_copy scope row new_row;
+  new_row
 
                   (*******************************************)
                   (*  Memorization of abbreviation expansion *)

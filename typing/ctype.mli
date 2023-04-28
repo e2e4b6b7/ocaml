@@ -107,8 +107,6 @@ val merge_row_fields:
         (label * type_expr option) list *
         (label * type_expr option) list *
         (label * type_expr option * type_expr option) list
-val filter_row_fields:
-        bool -> (label * row_field) list -> (label * row_field) list
 
 val generalize: type_expr -> unit
         (* Generalize in-place the given type *)
@@ -221,9 +219,9 @@ type typedecl_extraction_result =
 val extract_concrete_typedecl:
         Env.t -> type_expr -> typedecl_extraction_result
 
-type unify_variance = | Left | Right | Unknown | Soft
+type unify_relation = Left | Right | Equal | Unknown
 
-val unify: ?v:unify_variance -> Env.t -> type_expr -> type_expr -> unit
+val unify: ?relation:unify_relation -> Env.t -> type_expr -> type_expr -> unit
         (* Unify the two types given. Raise [Unify] if not possible. *)
 val unify_gadt:
         equations_level:int -> allow_recursive:bool ->
@@ -428,5 +426,3 @@ val package_subtype :
 
 (* Raises [Incompatible] *)
 val mcomp : Env.t -> type_expr -> type_expr -> unit
-
-val solve_type : type_expr -> unit

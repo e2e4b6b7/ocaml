@@ -721,7 +721,7 @@ let mark_partial =
   not. We work on the discriminating pattern heads of each sub-matrix: they
   are not omega/Any.
 *)
-let full_match ?_cheat closing env =  match env with (* romanv: To remove cheat *)
+let full_match closing env =  match env with
 | [] -> false
 | (discr, _) :: _ ->
   let open Patterns.Head in
@@ -740,14 +740,17 @@ let full_match ?_cheat closing env =  match env with (* romanv: To remove cheat 
       in
       let row = type_row () in
       if closing then
+        (* closing=true, we are considering the variant as closed *)
         List.for_all
           (fun (tag, _) -> List.mem tag pat_fields)
           (row_fields_lb row)
       else
-        row_closed row &&
-        List.for_all
-          (fun (tag, _) -> List.mem tag pat_fields)
-          (row_fields row)
+        match row_fields_ub row with
+        | None -> false
+        | Some fields ->
+            List.for_all
+              (fun (tag, _) -> List.mem tag pat_fields)
+              fields
       end
   | Constant Const_char _ ->
       List.length env = 256
@@ -919,12 +922,17 @@ let _build_other ext env =
               make_pat (Tpat_variant(tag, arg, cstr_row)) d.pat_type d.pat_env
             in
             let row = type_row () in
+            let possible_fields =
+              match row_fields_ub row with
+              | None -> row_kind row
+              | Some fields -> fields
+            in
             begin match
               List.fold_left
                 (fun others (tag,oty) ->
                   if List.mem tag tags then others else
                   make_other_pat tag (oty = None) :: others)
-                [] (row_fields row)
+                [] possible_fields
             with
               [] ->
                 let tag =
@@ -1316,7 +1324,7 @@ and specialize_and_exhaust ext pss n =
             Seq.map (set_args p) sub_witnesses
         in
         let try_omega () =
-          if full_match ~_cheat:true false constrs && not (_should_extend ext constrs) then
+          if full_match false constrs && not (_should_extend ext constrs) then
             Seq.empty
           else
             let sub_witnesses = exhaust ext default (n-1) in
@@ -1415,10 +1423,7 @@ let rec pressure_variants tdefs = function
                           | _ -> assert false)
                         constrs
                     in
-                    set_constraint
-                      "pressure_variants"
-                      (row_set_data row)
-                      (mk_set_tags "pressure_variants" fields)
+                    add_polyvariant_tags_constrint Right row fields
                   end
                 | _ -> ()
               end;

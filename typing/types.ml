@@ -38,45 +38,21 @@ and type_desc =
   | Tlink of type_expr
   | Tsubst of type_expr * type_expr option
   | Tvariant of row_desc
-  | Tsetop of setop * type_expr * type_expr
-  | Ttags of tags_desc
   | Tunivar of string option
   | Tpoly of type_expr * type_expr list
   | Tpackage of Path.t * (Longident.t * type_expr) list
 
-and setop =
-  | Union
-  | Intersection
+and constraint_relation = Left | Right | Equal | Unknown
 
-and tags_desc = (label * bool * type_expr option) list
-
-and set_id = int ref
-
-and set_data =
-  | SUnknown of string
-  | STags of string * label list
-  | SVar of string * set_id
-  | STop
-
-and set_variance = Left | Right | Unknown
+and row_kind = (label * type_expr option) list
 
 and row_desc =
-    { mutable row_fields: (label * type_expr option) list ref;
+    { mutable row_kind: row_kind;
       row_fixed: fixed_explanation option;
       row_name: (Path.t * type_expr list) option;
-      set_data: set_data }
+      debug_info: (string (* from *) * int (* debug id *)) }
 and fixed_explanation =
   | Univar of type_expr | Fixed_private | Reified of Path.t | Rigid
-and row_field = [`some] row_field_gen
-and _ row_field_gen =
-    RFpresent : type_expr option -> [> `some] row_field_gen
-  | RFeither :
-      { no_arg: bool;
-        arg_type: type_expr list;
-        matched: bool;
-        ext: [`some | `none] row_field_gen ref} -> [> `some] row_field_gen
-  | RFabsent : [> `some] row_field_gen
-  | RFnone : [> `none] row_field_gen
 
 and abbrev_memo =
     Mnil
@@ -473,7 +449,6 @@ type change =
   | Cscope of type_expr * int
   | Cname of
       (Path.t * type_expr list) option ref * (Path.t * type_expr list) option
-  | Crow of [`none|`some] row_field_gen ref
   | Ckind of [`var] field_kind_gen
   | Ccommu of [`var] commutable_gen
   | Cuniv of type_expr option ref * type_expr option
@@ -582,7 +557,7 @@ let compare_type t1 t2 = compare (get_id t1) (get_id t2)
 type set_solution =
   | SSUnion of set_solution * set_solution
   | SSIntersection of set_solution * set_solution
-  | SSVariable of set_id
+  | SSVariable of row_desc
   | SSTags of
       string list option * (* lb *)
       string list option   (* ub *)
@@ -590,360 +565,178 @@ type set_solution =
 
 type set_bound_solution = {
   tags: string list option;
-  variables: set_id list;
+  variables: row_desc list;
 }
 
-module Hashtbl = Hashtbl.Make(struct
-  type t = int ref
-  let equal = (==)
-  let hash = Hashtbl.hash
-end)
+let polyvariants_tag_ub_constraints : (row_desc * label list) list ref = ref []
+let polyvariants_tag_lb_constraints : (row_desc * label list) list ref = ref []
+let polyvariants_constraints : (row_desc * row_desc) list ref = ref []
 
-let constraints = ref []
-let edges_cache = ref None
+let variables_constraints : (type_expr * type_expr) list ref = ref []
 
-let is_not_test = false
+let dump =
+  let dump = open_out_gen [Open_append; Open_creat] 0o666 "dump.txt" in
+  Printf.fprintf dump "\n-- New env --\n\n";
+  dump
 
-let file =
-  if is_not_test then Stdlib.stdout else
-  let file = open_out_gen [Open_append; Open_creat] 0o666 "dump.txt" in
-  Printf.fprintf file "\n-- New env --\n\n";
-  file
-
-let copies = ref []
-let strace_copies id =
-  let rec trace_copies_aux copies id =
-    match copies with
-    | [] -> "", id
-    | (from_id, to_id) :: copies ->
-        if to_id == id
-        then
-          let trace, init_id = trace_copies_aux copies from_id in
-          Printf.sprintf "%d <- %s" !id trace, init_id
-        else trace_copies_aux copies id in
-  let trace, id = trace_copies_aux !copies id in
-  if trace = ""
-    then Printf.sprintf "%d" !id
-    else Printf.sprintf "%s%d\n" trace !id
-let trace_copies id =
-  let rec trace_copies_aux copies id =
-    match copies with
-    | [] -> "", id
-    | (from_id, to_id) :: copies ->
-        if to_id == id
-        then
-          let trace, init_id = trace_copies_aux copies from_id in
-          Printf.sprintf "%d <- %s" !id trace, init_id
-        else trace_copies_aux copies id in
-  let trace, id = trace_copies_aux !copies id in
-  if String.length trace > 0 then
-  Printf.fprintf file "%s%d\n" trace !id
-
-let sprint_set_data set_data = match set_data with
-  | SUnknown from -> Printf.sprintf "Unknown from %s" from
-  | SVar (from, id) ->
-      trace_copies id;
-      Printf.sprintf "V from %s: %d" from !id
-  | STags (from, tags) ->
-      Printf.sprintf "Tags from %s: %s"
-        from
-        (String.concat "" ["[";String.concat "," tags;"]"])
-  | STop -> "T"
-
-let sprint_variance v = match v with
+let sprint_constraint_relation v = match v with
   | Left -> "Left"
   | Right -> "Right"
+  | Equal -> "Equal"
   | Unknown -> "Unknown"
-
-let setop_name op = match op with
-  | Union -> "Union"
-  | Intersection -> "Intersection"
-
-let set_constraint from ?(v = Right) s1 s2 =
-  if is_not_test then () else
-  (Printf.fprintf file "From: %s; Variance: %s\n" from (sprint_variance v);
-  Printf.fprintf file "%s -- %s\n\n" (sprint_set_data s1) (sprint_set_data s2);
-  flush file;
-  edges_cache := None;
-  constraints := match v with
-  | Right -> (s1, s2) :: !constraints
-  | Left -> (s2, s1) :: !constraints
-  | Unknown -> (s1, s2) :: (s2, s1) :: !constraints)
-
-let set_unknown_constraint from =
-  if is_not_test then () else
-  Printf.fprintf file "Unknown constraint from: %s\n" from; flush file
-
-let cur_id = ref 0
-let new_id () = cur_id := !cur_id + 1; ref !cur_id
-
-let set_id set_data = match set_data with
-  | SVar (_, id) -> id
-  | _ -> ref (-1)
-let row_set_id row = set_id row.set_data
-
-let mk_set_top () =
-  if is_not_test then SUnknown "Not in test" else
-  STop
-let mk_set_unknown from =
-  if is_not_test then SUnknown "Not in test" else begin
-  Printf.fprintf file "Unknown from %s" from;
-  flush file;
-  SUnknown from
-  end
-let mk_set_var from =
-  if is_not_test then SUnknown "Not in test" else
-  SVar (from, new_id ())
-let mk_set_var_tags from tags =
-  if is_not_test then SUnknown "Not in test" else
-  (let var = mk_set_var from in
-  let desc = Printf.sprintf "mk_set_var_tags: %s" from in
-  set_constraint desc (STags (from, tags)) var;
-  var)
-let mk_set_tags from tags =
-  if is_not_test then SUnknown "Not in test" else
-  STags (from, tags)
-let row_set_data row =
-  if is_not_test then SUnknown "Not in test" else
-  row.set_data
-let cp_set_variable from id =
-  let new_id = new_id () in
-
-  copies := (id, new_id) :: !copies;
-
-  (* let with_id sd =
-    match sd with
-    | SVar (_, idd) -> id == idd
-    | _ -> false
-  in
-  let with_id (sd1, sd2) = with_id sd1 || with_id sd2 in
-
-  let cp_constraints = List.filter with_id !constraints in
-  let replace_id sd =
-    match sd with
-    | SVar (_, idd) as v -> if id == idd then SVar (from, new_id) else v
-    | sd -> sd
-  in
-  let replace_id (sd1, sd2) = (replace_id sd1, replace_id sd2) in
-  let cp_constraints = List.map replace_id cp_constraints in
-  constraints := List.append cp_constraints !constraints;
-  edges_cache := None; *)
-
-  SVar (from, new_id)
-
-let cp_set_data from row =
-  if is_not_test then SUnknown "Not in test" else
-  match row.set_data with
-  | SVar (_, id) -> cp_set_variable from id
-  | sd -> sd
 
 let sprint_tags tags = String.concat "" ["[";String.concat "," tags;"]"]
 
-let intersect_lists l1 l2 = List.filter (fun x -> List.mem x l1) l2
-let intersect_lists_assoc l1 l2 = List.filter (fun (x, _) -> List.mem x l1) l2
-(* Checks that l1 is subset of l2 *)
-let subset_lists l1 l2 = List.for_all (fun id -> List.mem id l2) l1
-let exclude_listsq l1 l2 = List.filter (fun id -> not @@ List.memq id l2) l1
+let sprint_row row =
+  let (from, id) = row.debug_info in
+  Printf.sprintf "Row %d from %s kind %s" id from
+    (sprint_tags @@ List.map fst row.row_kind)
 
-(* edges = ((edges_var_ub, edges_tag_ub), (edges_var_lb, edges_tag_lb)) *)
+let sprint_constrained_ty ty =
+  match get_desc ty with
+  | Tvariant row -> sprint_row row
+  | Tvar _ -> "TVar"
+  | _ -> assert false
+
+let _add_constraint relation v1 v2 constraints =
+  constraints := match relation with
+  | Left -> (v1, v2) :: !constraints
+  | Right -> (v2, v1) :: !constraints
+  | Equal | Unknown -> (v1, v2) :: (v2, v1) :: !constraints
+
+let log_new_polyvariant_constraint from relation row1 row2 =
+  Printf.fprintf dump "From: %s; Variance: %s\n" from (sprint_constraint_relation relation);
+  Printf.fprintf dump "%s -- %s\n\n" (sprint_row row1) (sprint_row row2);
+  flush dump
+
+let add_polyvariant_constraint ?(from="Unknown source") relation row1 row2 =
+  log_new_polyvariant_constraint from relation row1 row2;
+  _add_constraint relation row1 row2 polyvariants_constraints
+
+let log_new_polyvariant_tags_constraint relation row1 tags =
+  Printf.fprintf dump "Variance: %s\n" (sprint_constraint_relation relation);
+  Printf.fprintf dump "%s -- %s\n\n" (sprint_row row1) (sprint_tags tags);
+  flush dump
+
+let add_polyvariant_tags_constrint relation row tags =
+  log_new_polyvariant_tags_constraint relation row tags;
+  begin
+    match relation with
+    | Left | Equal | Unknown -> polyvariants_tag_lb_constraints := (row, tags) :: !polyvariants_tag_lb_constraints
+    | Right -> ()
+  end;
+  begin
+    match relation with
+    | Right | Equal | Unknown -> polyvariants_tag_ub_constraints := (row, tags) :: !polyvariants_tag_ub_constraints
+    | Left -> ()
+  end
+
+let log_new_constraint from relation ty1 ty2 =
+  Printf.fprintf dump "From: %s; Variance: %s\n" from (sprint_constraint_relation relation);
+  Printf.fprintf dump "%s -- %s\n\n" (sprint_constrained_ty ty1) (sprint_constrained_ty ty2);
+  flush dump
+
+let check_new_constraint ty1 ty2 =
+  match get_desc ty1, get_desc ty2 with
+  | Tvar _, Tvar _ -> ()
+  | Tvariant _, Tvariant _ -> assert false
+  | _ -> assert false
+
+let add_constraint ?(from="Unknown source") relation ty1 ty2 =
+  log_new_constraint from relation ty1 ty2;
+  check_new_constraint ty1 ty2;
+  _add_constraint relation ty1 ty2 variables_constraints
+
+let get_imediate_subtypes row =
+  List.map fst @@ List.filter (fun (_, r) -> r == row) !polyvariants_constraints
+
+let get_imediate_uptypes row =
+  List.map snd @@ List.filter (fun (r, _) -> r == row) !polyvariants_constraints
 
 let rec uniq l =
   match l with
   | [] -> []
   | h :: t -> h :: uniq (List.filter (fun e -> not (e == h)) t)
 
-let used_ids constraints =
-  let app s l =
-    match s with
-    | SVar (_, id) -> id :: l
-    | _ -> l
-  in
-  let used_ids =
-    List.fold_left
-      (fun l (s1, s2) -> app s1 @@ app s2 l)
-      []
-      constraints
-  in
-  let ans = uniq used_ids in
+let merge_lists_compare cmp l1 l2 = List.sort_uniq cmp @@ List.append l1 l2
+let intersect_lists l1 l2 = List.filter (fun x -> List.mem x l1) l2
+(* let intersect_lists_assoc l1 l2 = List.filter (fun (x, _) -> List.mem x l1) l2 *)
+(* Checks that l1 is subset of l2 *)
+let subset_lists l1 l2 = List.for_all (fun id -> List.mem id l2) l1
+let exclude_listsq l1 l2 = List.filter (fun id -> not @@ List.memq id l2) l1
+
+(* exception Romanv of string *)
+
+(** edges = ((edges_var_ub, edges_tag_ub), (edges_var_lb, edges_tag_lb)) *)
+
+let collect_tag_edges constraints merge =
+  let edges_tag = Hashtbl.create 13 in
   List.iter
-    (fun (s1, s2) ->
-      match s1 with
-      | SVar (_, id) -> assert (List.memq id ans)
-      | _ -> ();
-      match s2 with
-      | SVar (_, id) -> assert (List.memq id ans)
-      | _ -> ())
+    (fun (row, tags) ->
+      match Hashtbl.find_opt edges_tag row with
+      | None -> Hashtbl.add edges_tag row tags
+      | Some tags' -> Hashtbl.replace edges_tag row (merge tags tags'))
     constraints;
-  ans
+  edges_tag
 
-exception Romanv of string
+let collect_tag_ub_edges () =
+  collect_tag_edges !polyvariants_tag_ub_constraints intersect_lists
 
-let collect_edges_ () = try
-  let constraints = !constraints in
-  let used_ids = used_ids constraints in
+let collect_tag_lb_edges () =
+  collect_tag_edges !polyvariants_tag_lb_constraints (merge_lists_compare String.compare)
 
+let collect_var_edges () =
+  let constraints = !polyvariants_constraints in
   let edges_var_ub = Hashtbl.create 13 in
-  let edges_tag_ub = Hashtbl.create 13 in
   let edges_var_lb = Hashtbl.create 13 in
-  let edges_tag_lb = Hashtbl.create 13 in
+  let add_constraint htbl row1 row2 =
+    match Hashtbl.find_opt htbl row1 with
+    | None -> Hashtbl.add htbl row1 [row2]
+    | Some rows -> Hashtbl.replace htbl row1 (row2 :: rows) in
   List.iter
-    (fun id ->
-      Hashtbl.add edges_var_ub id (ref []);
-      Hashtbl.add edges_var_lb id (ref []);
-      Hashtbl.add edges_tag_lb id (ref []))
-    used_ids;
-  List.iter
-    (fun (sd1, sd2) ->
-      (match sd2 with
-      | SVar (_, id2) ->
-          (match sd1 with
-          | STags (_, tags) ->
-              let t = Hashtbl.find edges_tag_lb id2 in
-              t := List.append tags !t
-          | SVar (_, id1) ->
-              let v = Hashtbl.find edges_var_lb id2 in
-              v := id1 :: !v
-          | _ -> ())
-      | _ -> ());
-
-      (match sd1 with
-      | SVar (_, id1) ->
-          (match sd2 with
-          | STags (_, tags) ->
-              let t = Hashtbl.find_opt edges_tag_ub id1 in
-              (match t with
-              | Some t -> t := intersect_lists tags !t
-              | None -> Hashtbl.add edges_tag_ub id1 (ref tags))
-          | SVar (_, id2) ->
-              let v = Hashtbl.find edges_var_ub id1 in
-              v := id2 :: !v
-          | _ -> ())
-      |  _ -> ()))
+    (fun (row1, row2) ->
+      add_constraint edges_var_ub row1 row2;
+      add_constraint edges_var_lb row2 row1)
     constraints;
-  List.iter
-    (fun id ->
-      match Hashtbl.find_opt edges_tag_ub id with
-      | Some _ -> ()
-      | None -> Hashtbl.add edges_tag_ub id (ref []))
-    used_ids;
-  used_ids, ((edges_var_ub, edges_tag_ub), (edges_var_lb, edges_tag_lb))
-with Not_found -> raise (Romanv "Not_found in collect_edges_")
+  edges_var_ub, edges_var_lb
 
 let collect_edges () =
-  let (_, edges) = collect_edges_ () in
-  edges_cache := Some edges; edges
+  let (edges_var_ub, edges_var_lb) = collect_var_edges () in
+  let edges_tag_ub = collect_tag_ub_edges () in
+  let edges_tag_lb = collect_tag_lb_edges () in
+  ((edges_var_ub, edges_tag_ub),(edges_var_lb, edges_tag_lb))
 
-let find_parent id =
-  let rec find_parent_aux copies id =
-    match copies with
-    | [] -> None
-    | (from_id, to_id) :: copies ->
-      if to_id == id
-      then Some from_id
-      else find_parent_aux copies id in
-  find_parent_aux !copies id
-
-let solve_for_ merge (edges_var, edges_tag) id =
-  if not (Hashtbl.mem edges_tag id) ||
-     not (Hashtbl.mem edges_var id)
-  then None else try
-    let used = Hashtbl.create 17 in
-    let rec solve_for_aux id =
-      Hashtbl.add used id ();
-      let v = Hashtbl.find edges_var id in
-      let sub_vars = List.filter (fun id -> not @@ Hashtbl.mem used id) !v in
-      let t = Hashtbl.find edges_tag id in
-      let t = !t in
-      let t = if t = [] then None else Some t in
-      let tags = t :: List.map solve_for_aux sub_vars in
-      let tags = List.fold_left merge None tags in
-      Option.map (List.sort_uniq String.compare) tags in
-    solve_for_aux id
-  with Not_found -> raise (Romanv "Not_found in solve_for")
-
-let rec solve_for merge edges id =
-  let parent_id = find_parent id in
-  match parent_id with
-  | Some parent_id ->
-      let parent_solution = solve_for merge edges parent_id in
-      let solution = solve_for_ merge edges id in
-      merge parent_solution solution
-  | None -> solve_for_ merge edges id
-
-let solve_ub edges_ub id =
-  let opt_intersect a b =
-    match a, b with
-    | None, None -> None
-    | Some t, None | None, Some t -> Some t
-    | Some t1, Some t2 -> Some (intersect_lists t1 t2)
-  in
-  solve_for opt_intersect edges_ub id
-
-let solve_lb edges_lb id =
-  let opt_merge a b =
-    match a, b with
-    | None, None -> None
-    | Some t, None | None, Some t -> Some t
-    | Some t1, Some t2 -> Some (List.append t1 t2)
-  in
-  solve_for opt_merge edges_lb id
-
-let log_bounds ub lb id =
-  let sprint_bound b = match b with
-  | Some t -> sprint_tags t
-  | None -> "-" in
-  trace_copies id;
-  Printf.fprintf file "%d: ub: %s | lb: %s\n\n" !id (sprint_bound ub) (sprint_bound lb)
-
-let solve_set_type (edges_ub, edges_lb) id =
-  let ub = solve_ub edges_ub id in
-  let lb = solve_lb edges_lb id in
-
-  log_bounds ub lb id;
-
-  match ub, lb with
-  | Some ub_tags, Some lb_tags ->
-          if subset_lists lb_tags ub_tags
-            then SSTags (Some lb_tags, Some ub_tags)
-            else assert false
-  | Some ub_tags, None -> SSTags (None, Some ub_tags)
-  | None, Some lb_tags -> SSTags (Some lb_tags, None)
-  | None, None -> SSTags (None, None)
-
-let solve_set_type id =
-  let edges = collect_edges () in
-  solve_set_type edges id
-
-let find_connected ((edges, _), _) =
+(* romanv: Maybe we can merge this components in single type for performance *)
+let find_components ((edges, _), _) =
   let reachable = Hashtbl.create 17 in
-  let rec calc_reachable used id = (* romanv: fails on cycles *)
+  let rec calc_reachable used id =
     if Hashtbl.mem used id then [] else begin
     Hashtbl.add used id ();
     match Hashtbl.find_opt reachable id with
     | Some reacheble -> reacheble
     | None ->
-        let direct = !(Hashtbl.find edges id) in
+        let direct = Hashtbl.find_opt edges id in
+        let direct = Option.value direct ~default:[] in
         let indirect = List.map (calc_reachable used) direct in
-        let res = uniq (List.append direct (List.concat indirect)) in
-        Hashtbl.add reachable id res; res
+        uniq (List.append direct (List.concat indirect))
     end
   in
-  Seq.iter
-    (fun id -> ignore @@ calc_reachable (Hashtbl.create 17) id)
-    (Hashtbl.to_seq_keys edges);
+  Hashtbl.iter
+    (fun id _ -> Hashtbl.add reachable id (calc_reachable (Hashtbl.create 17) id))
+    edges;
   let connected = Hashtbl.create 17 in
-  Seq.iter
-    (fun id -> Hashtbl.add connected id [])
-    (Hashtbl.to_seq_keys edges);
   Hashtbl.iter
     (fun id1 reachable1 ->
       List.iter
         (fun id2 ->
-          let reachable2 = Hashtbl.find reachable id2 in
-          if List.memq id1 reachable2 then
-            let prev = Hashtbl.find connected id1 in
-            Hashtbl.replace connected id1 (id2 :: prev))
-        !reachable1)
+          if not (id1 == id2) then
+            let reachable2 = Hashtbl.find_opt reachable id2 in
+            let reachable2 = Option.value reachable2 ~default:[] in
+            if List.memq id1 reachable2 then
+              match Hashtbl.find_opt connected id1 with
+              | None -> Hashtbl.add connected id1 [id2]
+              | Some prev -> (Hashtbl.replace connected id1 (id2 :: prev)))
+        reachable1)
     edges;
   connected
 
@@ -951,16 +744,22 @@ let transform_edges_ edges connected =
   let edges = Hashtbl.copy edges in
   Hashtbl.iter
     (fun id edg ->
-      let con = Hashtbl.find connected id in
-      edg := exclude_listsq !edg con)
+      if Hashtbl.mem connected id then begin
+        let conn = Hashtbl.find connected id in
+        let new_edg = exclude_listsq edg conn in
+        Hashtbl.replace edges id new_edg
+      end)
     edges;
   Hashtbl.iter
     (fun id edg ->
-      let con = Hashtbl.find connected id in
-      let new_edges =
-        List.concat @@
-        List.map (fun id -> !(Hashtbl.find edges id)) con in
-      edg := uniq @@ List.append new_edges !edg)
+      if Hashtbl.mem connected id then begin
+        let con = Hashtbl.find connected id in
+        let get_edges row =
+          Option.value (Hashtbl.find_opt edges row) ~default:[] in
+        let transitive_edges = List.concat @@ List.map get_edges con in
+        let new_edges = uniq (List.append transitive_edges edg) in
+        Hashtbl.replace edges id new_edges
+      end)
     edges;
   edges
 
@@ -968,74 +767,68 @@ let transform_edges ((edges_lb, lb'), (edges_ub, ub')) connected =
   (transform_edges_ edges_lb connected, lb'),
   (transform_edges_ edges_ub connected, ub')
 
-let solve_for_with_context_ solve_rec merge (edges_var, edges_tag) id =
-  if not (Hashtbl.mem edges_tag id) ||
-     not (Hashtbl.mem edges_var id)
-  then { tags = None; variables = [] } else
-  let v = !(Hashtbl.find edges_var id) in
-  let solutions = List.map solve_rec v in
-  let tagss =
-    let tags = !(Hashtbl.find edges_tag id) in
-    let tags = if tags = [] then None else Some tags in
+let transform_context context connected =
+  let equal row = Option.value (Hashtbl.find_opt connected row) ~default:[] in
+  let new_context = List.concat @@ List.map equal context in
+  uniq @@ List.append context new_context
+
+let solve_for_with_context_ solve_rec merge (edges_var, edges_tag) row =
+  let vars_solution =
+    let vars_bound = Hashtbl.find_opt edges_var row in
+    let vars_bound = Option.value vars_bound ~default:[] in
+    List.map solve_rec vars_bound in
+  let tags_solution =
+    let tags = Hashtbl.find_opt edges_tag row in
     { tags; variables = [] }
   in
-  List.fold_left merge tagss solutions
+  List.fold_left merge tags_solution vars_solution
 
-let rec solve_for_with_context context merge edges id : set_bound_solution =
-  Printf.fprintf file "in %d;" !id;
-  if List.memq id context then { tags = None; variables = [id] } else
-  let parent_id = find_parent id in
-  let solve_rec = solve_for_with_context context merge edges in
-  match parent_id with
-  | Some parent_id ->
-      let parent_solution = solve_for_with_context context merge edges parent_id in
-      let solution = solve_for_with_context_ solve_rec merge edges id in
-      merge parent_solution solution
-  | None -> solve_for_with_context_ solve_rec merge edges id
+let rec solve_for_with_context context merge edges row : set_bound_solution =
+  if List.memq row context
+  then
+    { tags = None; variables = [row] }
+  else
+    let solve_rec = solve_for_with_context context merge edges in
+    solve_for_with_context_ solve_rec merge edges row
 
-let solve_ub_with_context context edges_ub id =
+let solve_bound_with_context tags_merge context edges row =
+  let variables_merge old_variables new_variables =
+    uniq @@ List.append old_variables new_variables in
+  let solutions_merge
+    {tags = old_tags; variables = old_variables}
+    {tags = new_tags; variables = new_variables} =
+    let tags = tags_merge old_tags new_tags in
+    let variables = variables_merge old_variables new_variables in
+    {tags; variables}
+  in
+  solve_for_with_context context solutions_merge edges row
+
+let solve_ub_with_context context edges_ub row =
   let tags_merge old_tags new_tags =
     match old_tags, new_tags with
     | None, None -> None
     | Some t, None | None, Some t -> Some t
     | Some t1, Some t2 -> Some (intersect_lists t1 t2) in
-  let variables_merge old_variables new_variables =
-    uniq @@ List.append old_variables new_variables in
-  let solutions_merge
-    {tags = old_tags; variables = old_variables}
-    {tags = new_tags; variables = new_variables} =
-    let tags = tags_merge old_tags new_tags in
-    let variables = variables_merge old_variables new_variables in
-    {tags; variables}
-  in
-  solve_for_with_context context solutions_merge edges_ub id
+  solve_bound_with_context tags_merge context edges_ub row
 
-let solve_lb_with_context context edges_lb id =
+let solve_lb_with_context context edges_lb row =
   let tags_merge old_tags new_tags =
     match old_tags, new_tags with
     | None, None -> None
     | Some t, None | None, Some t -> Some t
     | Some t1, Some t2 -> Some (List.append t1 t2) in
-  let variables_merge old_variables new_variables =
-    uniq @@ List.append old_variables new_variables in
-  let solutions_merge
-    {tags = old_tags; variables = old_variables}
-    {tags = new_tags; variables = new_variables} =
-    let tags = tags_merge old_tags new_tags in
-    let variables = variables_merge old_variables new_variables in
-    {tags; variables}
-  in
-  solve_for_with_context context solutions_merge edges_lb id
+  solve_bound_with_context tags_merge context edges_lb row
 
-let solve_set_type_with_context_ context (edges_ub, edges_lb) id =
-  if List.memq id context then SSVariable id else begin
-  let {tags=ub_tags; variables=ub_variables} = solve_ub_with_context context edges_ub id in
-  let {tags=lb_tags; variables=lb_variables} = solve_lb_with_context context edges_lb id in
+let solve_set_type_with_context_ context (edges_ub, edges_lb) (row : row_desc) =
+  if List.memq row context then SSVariable row else begin
+
+  let {tags=ub_tags; variables=ub_variables} = solve_ub_with_context context edges_ub row in
+  let {tags=lb_tags; variables=lb_variables} = solve_lb_with_context context edges_lb row in
 
   match ub_tags, lb_tags with
   | Some ub_tags, Some lb_tags when not @@ subset_lists lb_tags ub_tags ->
-      Printf.fprintf file "FAIL: %s; %s\n" (sprint_tags ub_tags) (sprint_tags lb_tags);
-      flush file;
+      Printf.fprintf dump "FAIL: %s; %s\n" (sprint_tags ub_tags) (sprint_tags lb_tags);
+      flush dump;
       assert false
   | _ ->
       let solution = SSTags (lb_tags, ub_tags) in
@@ -1050,192 +843,103 @@ let solve_set_type_with_context_ context (edges_ub, edges_lb) id =
           solution
           ub_variables in
       solution
-    end
+  end
 
 let solve_set_type_with_context context row =
-  Printf.fprintf file "\nContext: %d" (List.length context);
-  List.iter (fun id -> Printf.fprintf file " %d" !id) context;
-  Printf.fprintf file "\n";
   let edges = collect_edges () in
-  let connected = find_connected edges in (* romanv: connected context *)
+  let connected = find_components edges in
+  let context = transform_context context connected in
   let edges = transform_edges edges connected in
-  flush file;
-  solve_set_type_with_context_ context edges (row_set_id row)
+  solve_set_type_with_context_ context edges row
 
-let print_bound b = match b with
-| Some tags -> sprint_tags tags
-| None -> "T"
-
-let sprint_set_type row =
-  let data = row.set_data in
-  match data with
-  | STags _ -> "Tags..."
-  | SVar (from, id) -> Printf.sprintf "%s from %s" (strace_copies id) from
-  | SUnknown from -> Printf.sprintf "Unknown from %s" from
-  | STop -> "T"
-
-let create_row ~set_data ~fields ~fixed ~name =
-    { row_fields=fields; row_fixed=fixed;
-      row_name=name; set_data=set_data }
-
-(* [row_fields] subsumes the original [row_repr] *)
-let row_fields row =
-  match row.set_data with
-  | SVar (_, id) ->
-      let (edges, _) = collect_edges () in
-      let fields = !(row.row_fields) in
-      let ub = solve_ub edges id in
-      (match ub with
-      | Some tags -> intersect_lists_assoc tags fields
-      | None -> fields)
-  | SUnknown _ -> !(row.row_fields)
-  | STags _ -> raise (Romanv "1")
-  | _ -> raise (Romanv "2")
-
-let row_fields_lb row =
-  match row.set_data with
-  | SVar (_, id) ->
-      let (_, edges) = collect_edges () in
-      let fields = !(row.row_fields) in
-      let lb = solve_lb edges id in
-      (match lb with
-      | Some tags -> intersect_lists_assoc tags fields
-      | None -> fields)
-  | SUnknown _ -> !(row.row_fields)
-  | STags _ -> raise (Romanv "3")
-  | _ -> raise (Romanv "4")
-
-let row_repr_no_fields row = row
-
-let row_fixed row = (row_repr_no_fields row).row_fixed
-let row_name row = (row_repr_no_fields row).row_name
-
-let row_closed row =
-  match row.set_data with
-  | SVar (_, id) ->
-      let (edges, _) = collect_edges () in
-      let ub = solve_ub edges id in
-      (match ub with
-      | Some _ -> true
-      | None -> false)
-  | SUnknown _ -> false
+(* romanv: Could be solved much faster in case of empty context *)
+let solve_set_type row =
+  match solve_set_type_with_context [] row with
+  | SSTags (lb, ub) -> lb, ub
   | _ -> assert false
 
-let dump tag row =
-  Printf.fprintf file "get_row_field dump\n";
-  match row.row_name with
-  | Some (path, _) ->
-      Printf.fprintf file "Name: %s\n" (Path.name path)
-  | None -> ();
-  Printf.fprintf file "Tags: %s\n" (sprint_tags (List.map fst !(row.row_fields)));
-  Printf.fprintf file "Inferred tags: %s\n" (sprint_set_type row);
-  Printf.fprintf file "Searching for tag: %s\n" tag
+let cp_rows (rows : (row_desc * row_desc) list) : unit =
+  let context = List.map fst rows in
+  let solve (from, _to) =
+    let context = List.filter (fun row -> not (row == from)) context in
+    solve_set_type_with_context context from in
+  let solutions = List.map solve rows in
+  let rec cp_constraints (from, to_) solution =
+    let re = cp_constraints (from, to_) in
+    match solution with
+    | SSFail -> assert false
+    | SSIntersection (solution, SSVariable row) ->
+        let row = List.assq row rows in
+        add_polyvariant_constraint ~from:"cp_rows" Right to_ row;
+        re solution
+    | SSUnion (solution, SSVariable row) ->
+        let row = List.assq row rows in
+        add_polyvariant_constraint ~from:"cp_rows" Left to_ row;
+        re solution
+    | SSTags (lb, ub) ->
+        Option.iter (add_polyvariant_tags_constrint Left to_) lb;
+        Option.iter (add_polyvariant_tags_constrint Right to_) ub
+    | _ -> assert false
+  in
+  List.iter2 cp_constraints rows solutions
 
-let get_row_field_ tag row =
-  let rec find = function
-    | (tag',f) :: fields ->
-        if tag = tag' then Some f else find fields
-    | [] -> None
-  in find !(row.row_fields)
+let cur_id = ref 0
+let new_id () = cur_id := !cur_id + 1; !cur_id
 
-let get_row_field ?d tag row =
-  match d with
-  | Some true ->
-      let a = get_row_field_ tag row in
-      if a == None then dump tag row;
-      a
-  | _ -> get_row_field_ tag row
+let create_row ~from ~kind ~fixed ~name : row_desc =
+  let debug_info = (from, new_id ()) in
+  { row_kind=kind; row_fixed=fixed;
+    row_name=name; debug_info }
 
+(* [row_fields] subsumes the original [row_repr] *)
+let row_fields_ub row =
+  match solve_set_type row with
+  | _, Some tags -> Some (List.map (
+      fun tag -> tag,
+        let oty = List.assoc_opt tag row.row_kind in
+        match oty with
+        | Some ty -> ty
+        | None ->
+          Printf.fprintf dump "tag %s not found in row %s\n" tag (sprint_row row); flush dump; assert false
+      ) tags)
+  | _, None -> None
 
-let set_row_fields row fields =
-  row.row_fields <- fields
+let row_fields_lb row =
+  match solve_set_type row with
+  | Some tags, _ -> List.map (fun tag -> tag, List.assoc tag row.row_kind) tags
+  | None, _ -> []
+
+let row_kind row = row.row_kind
+let row_fixed row = row.row_fixed
+let row_name row = row.row_name
+let row_debug_info row = row.debug_info
+
+let row_closed row =
+  match solve_set_type row with
+  | _, Some _ -> true
+  | _, None -> false
+
+let get_row_field tag row =
+  List.assoc_opt tag row.row_kind
+
+let update_row_kind row kind =
+  row.row_kind <- kind
 
 let set_row_name row row_name =
   { row with row_name }
 
 type row_desc_repr =
-    Row of { fields: (label * type_expr option) list;
+    Row of { kind:row_kind;
              closed:bool;
              fixed:fixed_explanation option;
              name:(Path.t * type_expr list) option }
 
 let row_repr row =
-  let fields = row_fields row in
-  let row = row_repr_no_fields row in
   let closed = row_closed row in
-  Row { fields;
+  Row { kind = row.row_kind;
         closed;
         fixed = row.row_fixed;
         name = row.row_name }
-
-type row_field_view =
-    Rpresent of type_expr option
-  | Reither of bool * type_expr list * bool
-        (* 1st true denotes a constant constructor *)
-        (* 2nd true denotes a tag in a pattern matching, and
-           is erased later *)
-  | Rabsent
-
-let rec row_field_repr_aux tl : row_field -> row_field = function
-  | RFeither ({ext = {contents = RFnone}} as r) ->
-      RFeither {r with arg_type = tl@r.arg_type}
-  | RFeither {arg_type;
-              ext = {contents = RFeither _ | RFpresent _ | RFabsent as rf}} ->
-      row_field_repr_aux (tl@arg_type) rf
-  | RFpresent (Some _) when tl <> [] ->
-      RFpresent (Some (List.hd tl))
-  | RFpresent _ as rf -> rf
-  | RFabsent -> RFabsent
-
-let row_field_repr fi =
-  match row_field_repr_aux [] fi with
-  | RFeither {no_arg; arg_type; matched} -> Reither (no_arg, arg_type, matched)
-  | RFpresent t -> Rpresent t
-  | RFabsent -> Rabsent
-
-let rec row_field_ext (fi : row_field) =
-  match fi with
-  | RFeither {ext = {contents = RFnone} as ext} -> ext
-  | RFeither {ext = {contents = RFeither _ | RFpresent _ | RFabsent as rf}} ->
-      row_field_ext rf
-  | _ -> Misc.fatal_error "Types.row_field_ext "
-
-let rf_present oty = RFpresent oty
-let rf_absent = RFabsent
-let rf_either ?use_ext_of ~no_arg arg_type ~matched =
-  let ext =
-    match use_ext_of with
-      Some rf -> row_field_ext rf
-    | None -> ref RFnone
-  in
-  RFeither {no_arg; arg_type; matched; ext}
-
-let rf_either_of = function
-  | None ->
-      RFeither {no_arg=true; arg_type=[]; matched=false; ext=ref RFnone}
-  | Some ty ->
-      RFeither {no_arg=false; arg_type=[ty]; matched=false; ext=ref RFnone}
-
-let eq_row_field_ext rf1 rf2 =
-  row_field_ext rf1 == row_field_ext rf2
-
-let changed_row_field_exts l f =
-  let exts = List.map row_field_ext l in
-  f ();
-  List.exists (fun r -> !r <> RFnone) exts
-
-let match_row_field ~present ~absent ~either (f : row_field) =
-  match f with
-  | RFabsent -> absent ()
-  | RFpresent t -> present t
-  | RFeither {no_arg; arg_type; matched; ext} ->
-      let e : row_field option =
-        match !ext with
-        | RFnone -> None
-        | RFeither _ | RFpresent _ | RFabsent as e -> Some e
-      in
-      either no_arg arg_type matched e
-
 
 (**** Some type creators ****)
 
@@ -1260,7 +964,6 @@ let undo_change = function
   | Clevel (ty, level) -> Transient_expr.set_level ty level
   | Cscope (ty, scope) -> Transient_expr.set_scope ty scope
   | Cname  (r, v)    -> r := v
-  | Crow   r         -> r := RFnone
   | Ckind  (FKvar r) -> r.field_kind <- FKprivate
   | Ccommu (Cvar r)  -> r.commu <- Cunknown
   | Cuniv  (r, v)    -> r := v
@@ -1282,15 +985,18 @@ let sprint_desc = function
   | Ttuple _ -> "Ttuple"
   | Tpoly _ -> "Tpoly"
   | Tsubst _ -> "Tsubst"
-  | _ -> assert false
 
 let dump_link ty ty' =
-  Printf.fprintf file "link_type: %s - %s\n" (sprint_desc ty.desc) (sprint_desc ty'.desc)
+  Printf.fprintf dump "link_type: %s - %s\n" (sprint_desc ty.desc) (sprint_desc ty'.desc)
 
 let log_type ty =
   if ty.id <= !last_snapshot then log_change (Ctype (ty, ty.desc))
-let link_type_ ty ty' =
+let link_type ty ty' =
+  let ty = repr ty in
+  let ty' = repr ty' in
+  if ty == ty' then () else begin
   log_type ty;
+  (* dump_link ty ty'; *)
   let desc = ty.desc in
   Transient_expr.set_desc ty (Tlink ty');
   (* Name is a user-supplied name for this unification variable (obtained
@@ -1306,27 +1012,9 @@ let link_type_ ty ty' =
       | None, None   -> ()
       end
   | _ -> ()
+  end
   (* ; assert (check_memorized_abbrevs ()) *)
-  (*  ; check_expans [] ty' *)
-
-let link_type ty ty' =
-  let ty = repr ty in
-  let ty' = repr ty' in
-  if ty == ty' then () else
-  (* dump_link ty ty'; *)
-  match ty.desc, ty'.desc with
-  | Tvariant _, Tvariant _ -> ()
-  | Tvar _, Tvariant _ ->
-      Transient_expr.set_desc ty
-        (Tvariant (
-          create_row
-            ~set_data:(mk_set_var "link_type")
-            ~fields:(ref [])
-            ~fixed:None
-            ~name:None));
-  | Tvariant _, Tvar _ -> assert false
-  | _ -> link_type_ ty ty'
-(* TODO: consider eliminating set_type_desc, replacing it with link types *)
+  (*  ; check_expans [] ty' *)(* TODO: consider eliminating set_type_desc, replacing it with link types *)
 let set_type_desc ty td =
   let ty = repr ty in
   if td != ty.desc then begin
@@ -1352,15 +1040,6 @@ let set_univar rty ty =
   log_change (Cuniv (rty, !rty)); rty := Some ty
 let set_name nm v =
   log_change (Cname (nm, !nm)); nm := v
-
-let rec link_row_field_ext ~(inside : row_field) (v : row_field) =
-  match inside with
-  | RFeither {ext = {contents = RFnone} as e} ->
-      let RFeither _ | RFpresent _ | RFabsent as v = v in
-      log_change (Crow e); e := v
-  | RFeither {ext = {contents = RFeither _ | RFpresent _ | RFabsent as rf}} ->
-      link_row_field_ext ~inside:rf v
-  | _ -> invalid_arg "Types.link_row_field_ext"
 
 let rec link_kind ~(inside : field_kind) (k : field_kind) =
   match inside with

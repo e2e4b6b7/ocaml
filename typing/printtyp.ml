@@ -529,27 +529,19 @@ and raw_type_desc ppf = function
         raw_type t
         raw_type_list tl
   | Tvariant row ->
-      let Row {fields; name; fixed} = row_repr row in
+      let Row {kind; name; fixed} = row_repr row in
       fprintf ppf
         "@[<hov1>{@[%s@,%a;@]@ %s%a;@ @[<1>%s%t@]}@]"
-        "row_fields="
+        "row_kind="
         (raw_list (fun ppf (l, f) ->
           fprintf ppf "@[%s,@ %a@]" l raw_field f))
-        fields
+        kind
         "row_fixed=" raw_row_fixed fixed
         "row_name="
         (fun ppf ->
           match name with None -> fprintf ppf "None"
           | Some(p,tl) ->
               fprintf ppf "Some(@,%a,@,%a)" path p raw_type_list tl)
-  | Tsetop (op, l, r) ->
-      fprintf ppf "@[<1>Tsetop@,%s@,%a@,%a@]" (setop_name op) raw_type l raw_type r
-  | Ttags desc ->
-      fprintf ppf
-        "@[%a@]"
-        (raw_list (fun ppf (l, b, f) ->
-          fprintf ppf "@[%s, %b,@ %a@]" l b raw_field f))
-        desc
   | Tpackage (p, fl) ->
       fprintf ppf "@[<hov1>Tpackage(@,%a@,%a)@]" path p
         raw_type_list (List.map snd fl)
@@ -1055,19 +1047,13 @@ let add_type_to_preparation = prepare_type
 (* Disabled in classic mode when printing an unification error *)
 let print_labels = ref true
 
-type set_solution =
-  | PSUnion of set_solution * set_solution
-  | PSIntersection of set_solution * set_solution
-  | PSVariable of set_id
+type polyvariant_solution =
+  | PSUnion of polyvariant_solution * polyvariant_solution
+  | PSIntersection of polyvariant_solution * polyvariant_solution
+  | PSVariable of row_desc
   | PSTags of
       (string * type_expr option) list option * (* lb *)
       (string * type_expr option) list option   (* ub *)
-
-module RefHashtbl = Hashtbl.Make(struct
-  type t = int ref
-  let equal = (==)
-  let hash = Hashtbl.hash
-end)
 
 let rec transform_solution get_field context solution =
   let re = transform_solution get_field context in
@@ -1089,15 +1075,15 @@ let rec iter_variables f solution =
 
 let solve_types ty =
   let solutions = Hashtbl.create 17 in
-  let used_variables = RefHashtbl.create 17 in
+  let used_variables = Hashtbl.create 17 in
   let context = ref [] in
   let visited = Hashtbl.create 13 in
   let rec solve_type_context ty =
     if Hashtbl.mem visited (get_id ty) then () else begin
     Hashtbl.add visited (get_id ty) ();
-    let set_id =
+    let row =
       match get_desc ty with
-      | Tvariant row -> Some (row_set_id row)
+      | Tvariant row -> Some row
       | _ -> None
     in
     (match get_desc ty with
@@ -1105,12 +1091,12 @@ let solve_types ty =
         let solution = solve_set_type_with_context (List.map fst !context) row in
         let get_field l = assert ((get_row_field l row) <> None); Option.get (get_row_field l row) in
         let solved_ty = transform_solution get_field context solution in
-        iter_variables (fun id -> RefHashtbl.add used_variables id None) solved_ty;
+        iter_variables (fun id -> Hashtbl.add used_variables id None) solved_ty;
         Hashtbl.add solutions (get_id ty) solved_ty
     | _ -> ());
-    (match set_id with
-    | Some set_id ->
-        context := (set_id, ty) :: !context
+    (match row with
+    | Some row ->
+        context := (row, ty) :: !context
     | None -> ());
     Btype.iter_type_expr solve_type_context ty
     end in
@@ -1158,18 +1144,16 @@ let rec tree_of_typexp_ ((solutions, used_variables) as c) mode ty =
         then tree_of_typexp_ c mode (List.hd tyl')
         else Otyp_constr (tree_of_path Type p', tree_of_typlist c mode tyl')
     | Tvariant row ->
-        let set_id = row_set_id row in
-        let used = RefHashtbl.mem used_variables set_id in
+        let used = Hashtbl.mem used_variables row in
+        assert (Hashtbl.mem solutions (tty.id));
         let solution = Hashtbl.find solutions (tty.id) in
-        let tree = tree_of_set_solution (sprint_set_type row) c mode solution in
+        let tree = tree_of_set_solution c mode solution in
         if used then begin
-          assert (RefHashtbl.find used_variables set_id = None);
+          assert (Hashtbl.mem used_variables row);
           let name = Names.new_name () in
-          RefHashtbl.replace used_variables set_id (Some (Otyp_var (true, name)));
+          Hashtbl.replace used_variables row (Some (Otyp_var (true, name)));
           Otyp_alias (tree, name)
         end else tree
-    | Ttags _ -> assert false
-    | Tsetop _ -> assert false
     | Tobject (fi, nm) ->
         tree_of_typobject c mode fi !nm
     | Tnil | Tfield _ ->
@@ -1214,7 +1198,7 @@ let rec tree_of_typexp_ ((solutions, used_variables) as c) mode ty =
     Otyp_alias (pr_typ (), Names.name_of_type Names.new_name px) end
   else pr_typ ()
 
-and tree_of_set_solution d ((_, used_variables) as c) mode solution =
+and tree_of_set_solution ((_, used_variables) as c) mode solution =
   match solution with
   | PSTags (lb, ub) ->
       let fields =
@@ -1229,13 +1213,15 @@ and tree_of_set_solution d ((_, used_variables) as c) mode solution =
           l, Option.map (tree_of_typexp_ c mode) ty)
         fields
       in
-      Otyp_variant (d, fields)
-  | PSVariable id ->
-      (match RefHashtbl.find used_variables id with
+      Otyp_variant ("", fields)
+  | PSVariable id -> begin
+      assert (Hashtbl.mem used_variables id);
+      match Hashtbl.find used_variables id with
       | Some tree -> tree
-      | None -> assert false)
-  | PSIntersection (l, r) -> Otyp_setop ("&", tree_of_set_solution d c mode l, tree_of_set_solution d c mode r)
-  | PSUnion (l, r) -> Otyp_setop ("|", tree_of_set_solution d c mode l, tree_of_set_solution d c mode r)
+      | None -> assert false
+    end
+  | PSIntersection (l, r) -> Otyp_setop ("&", tree_of_set_solution c mode l, tree_of_set_solution c mode r)
+  | PSUnion (l, r) -> Otyp_setop ("|", tree_of_set_solution c mode l, tree_of_set_solution c mode r)
 
 and tree_of_typlist c mode tyl =
   List.map (tree_of_typexp_ c mode) tyl
@@ -2167,13 +2153,15 @@ let type_path_list =
 let hide_variant_name t =
   match get_desc t with
   | Tvariant row ->
-      let Row {fields; name; fixed} = row_repr row in
+      let Row {kind; name; fixed} = row_repr row in
       if name = None then t else
-      let set_data = cp_set_data "hide_variant_name" row in
-      newty2 ~level:(get_level t)
-        (Tvariant
-           (create_row ~fields ~fixed ~name:None
-              ~set_data))
+      let new_row = create_row
+          ~from:"hide_variant_name"
+          ~kind
+          ~fixed
+          ~name:None in
+      add_polyvariant_constraint ~from:"hide_variant_name" Equal new_row row;
+      newty2 ~level:(get_level t) (Tvariant new_row)
   | _ -> t
 
 let prepare_expansion Errortrace.{ty; expanded} =

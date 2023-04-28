@@ -2905,15 +2905,10 @@ let call_switcher_variant_constr loc fail arg int_lambda_list =
 
 let combine_variant loc row arg partial ctx def (tag_lambda_list, total1, _pats)
     =
-  let num_constr = ref 0 in
-  if row_closed row then
-    List.iter (* romanv: To fix *)
-      (fun (_, f) ->
-        match f with
-        | _ -> incr num_constr)
-      (row_fields row)
-  else
-    num_constr := max_int;
+  let num_constr = ref @@
+    match row_fields_ub row with
+    | None -> max_int;
+    | Some fields -> List.length fields; in
   let test_int_or_block arg if_int if_block =
     Lifthenelse (Lprim (Pisint, [ arg ], loc), if_int, if_block)
   in

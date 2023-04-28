@@ -258,7 +258,7 @@ and transl_type_aux env policy styp =
         | Some ty ->
             if get_level ty = Btype.generic_level
               then unify_var
-              else unify ?v:None
+              else unify ?relation:None
       in
       List.iter2
         (fun (sty, cty) ty' ->
@@ -321,14 +321,14 @@ and transl_type_aux env policy styp =
       let ty = Ctype.expand_head env (newconstr path ty_args) in
       let ty = match get_desc ty with
         Tvariant row ->
-          let fields = row_fields row in
           (* NB: row is always non-static here; more is thus never Tnil *)
-          let set_data = cp_set_data "transl_type_aux" row in
-          let row =
-            create_row ~fields
-              ~fixed:None ~name:(Some (path, ty_args))
-              ~set_data in
-          newty (Tvariant row)
+          let row' =
+            create_row
+              ~from:"transl_type_aux"
+              ~kind:[]
+              ~fixed:None ~name:(Some (path, ty_args)) in
+          add_polyvariant_constraint Right row' row; (* romanv: maybe Equal*)
+          newty (Tvariant row')
       | Tobject (fi, _) ->
           let _, tv = flatten_fields fi in
           if policy = Univars then pre_univars := tv :: !pre_univars;
@@ -377,22 +377,23 @@ and transl_type_aux env policy styp =
       ctyp (Ttyp_alias (cty, alias)) cty.ctyp_type
   | Ptyp_variant(fields, closed, present) ->
       let name = ref None in
-      let mkfield l f =
-        let fields = [l,f] in
-        let set_data = mk_set_var_tags "transl_type_aux 1" [l] in
-        newty (Tvariant (create_row ~fields
-                           ~fixed:None ~name:None
-                           ~set_data)) in
+      let mkfield l oty =
+        let row = create_row
+          ~from:"transl_type_aux"
+          ~kind:[l,oty]
+          ~fixed:None
+          ~name:None in
+        newty (Tvariant row) in
       let hfields = Hashtbl.create 17 in
       let add_typed_field loc l oty =
         let h = Btype.hash_variant l in
         try
-          let (l',f') = Hashtbl.find hfields h in
+          let (l',oty') = Hashtbl.find hfields h in
           (* Check for tag conflicts *)
           if l <> l' then raise(Error(styp.ptyp_loc, env, Variant_tags(l, l')));
-          let ty = mkfield l oty and ty' = mkfield l f' in
+          let ty = mkfield l oty and ty' = mkfield l oty' in
           if is_equal env false [ty] [ty'] then () else
-          try unify env ty ty'
+          try unify ~relation:Equal env ty ty'
           with Unify _trace ->
             raise(Error(loc, env, Constructor_mismatch (ty,ty')))
         with Not_found ->
@@ -426,7 +427,7 @@ and transl_type_aux env policy styp =
             name := if Hashtbl.length hfields <> 0 then None else nm;
             let fl = match get_desc (expand_head env cty.ctyp_type), nm with
               Tvariant row, _ when Btype.static_row row ->
-                row_fields row
+                row_kind row
             | Tvar _, Some(p, _) ->
                 raise(Error(sty.ptyp_loc, env, Undefined_type_constructor p))
             | _ ->
@@ -450,14 +451,11 @@ and transl_type_aux env policy styp =
             present
       end;
       let name = !name in
-      let set_tags =
-        Hashtbl.fold
-          (fun _ (l, _) a -> l :: a)
-          hfields
-          []
-      in
-      let set_data = mk_set_var_tags "transl_type_aux 2" set_tags in
-      let row = create_row ~fields ~fixed:None ~name ~set_data in
+      let row = create_row
+        ~from:"transl_type_aux"
+        ~kind:fields
+        ~fixed:None
+        ~name in
       let ty = newty (Tvariant row) in
       ctyp (Ttyp_variant (tfields, closed, present)) ty
   | Ptyp_poly(vars, st) ->

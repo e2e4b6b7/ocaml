@@ -57,7 +57,6 @@ open Asttypes
  *)
 type type_expr
 type row_desc
-type row_field
 type field_kind
 type commutable
 
@@ -123,14 +122,6 @@ type type_desc =
   | Tvariant of row_desc
   (** Representation of polymorphic variants, see [row_desc]. *)
 
-  | Tsetop of setop * type_expr * type_expr
-  (** Union of the polymorphic variants.
-      Creates after solving of the polymorphic variant type *)
-
-  | Ttags of tags_desc
-  (** Solved tags for the polymorphic variants
-      *)
-
   | Tunivar of string option
   (** Occurrence of a type variable introduced by a
       forall quantifier / [Tpoly]. *)
@@ -148,12 +139,6 @@ and fixed_explanation =
   | Fixed_private (** The row type is private *)
   | Reified of Path.t (** The row was reified *)
   | Rigid (** The row type was made rigid during constraint verification *)
-
-and setop =
-  | Union
-  | Intersection
-
-and tags_desc = (label * bool * type_expr option) list
 
 (** [abbrev_memo] allows one to keep track of different expansions of a type
     alias. This is done for performance purposes.
@@ -316,60 +301,55 @@ val compare_type: type_expr -> type_expr -> int
 
 *)
 
-type set_data
-type set_id = int ref
-
 type set_solution =
   | SSUnion of set_solution * set_solution
   | SSIntersection of set_solution * set_solution
-  | SSVariable of set_id
+  | SSVariable of row_desc
   | SSTags of
       string list option * (* lb *)
       string list option   (* ub *)
   | SSFail
 
-val setop_name: setop -> string
+type constraint_relation = Left | Right | Equal | Unknown
+type row_kind = (label * type_expr option) list
 
-val row_set_data: row_desc -> set_data
-val row_set_id: row_desc -> set_id
+val cp_rows: (row_desc * row_desc) list -> unit
 
-val mk_set_top: unit -> set_data
-val mk_set_var: string -> set_data
-val mk_set_var_tags: string -> label list -> set_data
-val mk_set_tags: string -> label list -> set_data
-val mk_set_unknown: string -> set_data
+val add_polyvariant_constraint:
+  ?from:string -> constraint_relation -> row_desc -> row_desc -> unit
+val add_polyvariant_tags_constrint:
+  constraint_relation -> row_desc -> label list -> unit
+val add_constraint:
+  ?from:string -> constraint_relation -> type_expr -> type_expr -> unit
 
-val cp_set_data: string -> row_desc -> set_data
+val get_imediate_subtypes: row_desc -> row_desc list
+val get_imediate_uptypes: row_desc -> row_desc list
 
-type set_variance = Left | Right | Unknown
-
-(* First is the subtype of second by default *)
-val set_constraint: string -> ?v:set_variance -> set_data -> set_data -> unit
-val set_unknown_constraint: string -> unit
-
-val sprint_set_type: row_desc -> string
-
-val solve_set_type_with_context: set_id list -> row_desc -> set_solution
+val solve_set_type_with_context: row_desc list -> row_desc -> set_solution
+val solve_set_type: row_desc -> label list option * label list option
 
 val create_row:
-  set_data: set_data ->
+  from: string ->
+  kind: row_kind ->
   fixed: fixed_explanation option ->
   name: (Path.t * type_expr list) option -> row_desc
 
-val row_fields: row_desc -> (label * type_expr option) list
+val row_fields_ub: row_desc -> (label * type_expr option) list option
 val row_fields_lb: row_desc -> (label * type_expr option) list
+val row_kind: row_desc -> row_kind
 val row_fixed: row_desc -> fixed_explanation option
 val row_name: row_desc -> (Path.t * type_expr list) option
 val row_closed: row_desc -> bool
+val row_debug_info: row_desc -> string * int
 
 val set_row_name: row_desc -> (Path.t * type_expr list) option -> row_desc
-val set_row_fields: row_desc -> (label * type_expr option) list -> unit
+val update_row_kind: row_desc -> row_kind -> unit
 
 val get_row_field: label -> row_desc -> type_expr option option
 
 (** get all fields at once; different from the old [row_repr] *)
 type row_desc_repr =
-    Row of { fields: (label * type_expr option) list;
+    Row of { kind:row_kind;
              closed: bool;
              fixed:  fixed_explanation option;
              name:   (Path.t * type_expr list) option }
@@ -738,7 +718,6 @@ val set_scope: type_expr -> int -> unit
 val set_name:
     (Path.t * type_expr list) option ref ->
     (Path.t * type_expr list) option -> unit
-val link_row_field_ext: inside:row_field -> row_field -> unit
         (* Extract the extension variable of [inside] and set it to the
            second argument *)
 val set_univar: type_expr option ref -> type_expr -> unit

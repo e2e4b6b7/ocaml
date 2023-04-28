@@ -404,8 +404,6 @@ let merge_row_fields fi1 fi2 =
   | _, [p2] when not (List.mem_assoc (fst p2) fi1) -> (fi1, fi2, [])
   | _ -> merge_rf [] [] [] (sort_row_fields fi1) (sort_row_fields fi2)
 
-let filter_row_fields _erase l = l
-
                     (**************************************)
                     (*  Check genericity of type schemes  *)
                     (**************************************)
@@ -1043,7 +1041,7 @@ let rec copy ?partial ?keep_names scope ty =
                             | abbrev  -> abbrev))
           end
       | Tvariant row ->
-          Tvariant (copy_row copy true row)
+          Tvariant (copy_row scope copy true row)
       | Tobject (ty1, _) when partial <> None ->
           Tobject (copy ty1, ref None)
       | _ -> copy_type_desc ?keep_names copy desc
@@ -1258,8 +1256,6 @@ let rec copy_sep ~cleanup_scope ~fixed ~free ~bound ~may_share
           visited
       | Tlink _ | Tsubst _ ->
           assert false
-      | Tsetop _ | Ttags _ ->
-          assert false
     in
     let copy_rec = copy_sep ~cleanup_scope ~fixed ~free ~bound visited in
     let desc' =
@@ -1267,7 +1263,7 @@ let rec copy_sep ~cleanup_scope ~fixed ~free ~bound ~may_share
       | Tvariant row ->
           (* We shall really check the level on the row variable *)
           let row =
-            copy_row (copy_rec ~may_share:true) fixed row in
+            copy_row cleanup_scope (copy_rec ~may_share:true) fixed row in
           Tvariant row
       | Tpoly (t1, tl) ->
           let tl' = List.map (fun t -> newty (get_desc t)) tl in
@@ -1558,7 +1554,6 @@ let rec extract_concrete_typedecl env ty =
   | Tvariant _ | Tpackage _ -> Has_no_typedecl
   | Tvar _ | Tunivar _ -> May_have_typedecl
   | Tlink _ | Tsubst _ -> assert false
-  | Tsetop _ | Ttags _ -> assert false
 
 (* Implementing function [expand_head_opt], the compiler's own version of
    [expand_head] used for type-based optimisations.
@@ -2212,7 +2207,7 @@ and mcomp_kind k1 k2 =
   | _                  -> ()
 
 and mcomp_row type_pairs env row1 row2 =
-  let _r1, _r2, pairs = merge_row_fields (row_fields row1) (row_fields row2) in
+  let _r1, _r2, pairs = merge_row_fields (row_kind row1) (row_kind row2) in
   List.iter
     (fun (_,f1,f2) ->
       match f1, f2 with
@@ -2494,20 +2489,20 @@ let unify3_var env t1' t2 t2' =
 *)
 
 (* Left variance means that left argument should became a supertype of right *)
-type unify_variance = | Left | Right | Unknown | Soft
+type unify_relation = Left | Right | Equal | Unknown
 
-let inv v = match v with
+let invert_relation v = match v with
   | Left -> Right
   | Right -> Left
   | Unknown -> Unknown
-  | Soft -> Soft
+  | Equal -> Equal
 
-let u_variance = ref Unknown
+let unify_relation = ref Unknown
 
-let set_u_variance uv f =
-  Misc.protect_refs [Misc.R (u_variance, uv)] f
+let set_unify_relation uv f =
+  Misc.protect_refs [Misc.R (unify_relation, uv)] f
 
-let inv_u_variance f = set_u_variance (inv !u_variance) f
+let invert_unify_relation f = set_unify_relation (invert_relation !unify_relation) f
 
 let rec unify (env:Env.t ref) t1 t2 =
   (* First step: special cases (optimizations) *)
@@ -2621,7 +2616,7 @@ and unify3 env t1 t1' t2 t2' =
         (Tarrow (l1, t1, u1, c1), Tarrow (l2, t2, u2, c2)) when l1 = l2 ||
         (!Clflags.classic || !umode = Pattern) &&
         not (is_optional l1 || is_optional l2) ->
-        inv_u_variance (fun  _ -> unify env t1 t2);
+        invert_unify_relation (fun  _ -> unify env t1 t2);
         unify env u1 u2;
           begin match is_commu_ok c1, is_commu_ok c2 with
           | false, true -> set_commu_ok c1
@@ -2828,14 +2823,15 @@ and unify_kind k1 k2 =
   | (Fpublic, Fpublic)               -> ()
   | _                                -> assert false
 
-and variance_coe () = match !u_variance with
+and relation_coerce () =
+  match !unify_relation with
   | Left -> Types.Left
   | Right -> Types.Right
   | Unknown -> Types.Unknown
-  | Soft -> Types.Unknown
+  | Equal -> Types.Equal
 
-and unify_row env row1 row2 =
-  let r1, r2, pairs = merge_row_fields (row_fields row1) (row_fields row2) in
+and unify_row_kind_pair env row1 row2 =
+  let r1, r2, pairs = merge_row_fields (row_kind row1) (row_kind row2) in
   List.iter
     (fun (tag,t1,t2) ->
       match t1, t2 with
@@ -2850,21 +2846,65 @@ and unify_row env row1 row2 =
             raise_trace_for
               Unify (Variant (Incompatible_types_for tag) :: trace)))
     pairs;
-  let common =
+  let r1' =
     List.map
-      (fun (tag,t1,_) -> tag, t1)
-      pairs in
-  let fields = List.append common (List.append r1 r2) in
-  set_row_fields row1 fields;
-  set_row_fields row2 fields;
-  match !u_variance with
-  | Soft -> ()
-  | _ ->
-      set_constraint
-        "unify_row"
-        ~v:(variance_coe ())
-        (row_set_data row1)
-        (row_set_data row2)
+      (fun (tag, t) -> tag, Option.map (fun t -> let ty = newvar () in unify env t ty; ty) t)
+      r1 in
+  let r2' =
+    List.map
+      (fun (tag, t) -> tag, Option.map (fun t -> let ty = newvar () in unify env ty t; ty) t)
+      r2 in
+  let common1 =
+    List.map (fun (tag,t1,_) -> tag, t1) pairs in
+  let common2 =
+    List.map (fun (tag,_,t2) -> tag, t2) pairs in
+  update_row_kind row1 (List.append common1 (List.append r1 r2'));
+  update_row_kind row2 (List.append common2 (List.append r1' r2));
+
+and go_up used env row =
+  if List.memq row !used then () else begin
+  used := row :: !used;
+  let row_uptypes = get_imediate_uptypes row in
+  List.iter (fun ty -> unify_row_kind_up used env row ty) row_uptypes
+  end
+
+and go_sub used env row =
+  if List.memq row !used then () else begin
+  used := row :: !used;
+  let row_subtypes = get_imediate_subtypes row in
+  List.iter (fun ty -> unify_row_kind_sub used env ty row) row_subtypes
+  end
+
+(** row2 is a supertype. Going in the direction of row2 *)
+and unify_row_kind_up used env row1 row2 =
+  unify_row_kind_pair env row1 row2;
+  go_up used env row2;
+
+(** row2 is a supertype. Going in the direction of row1 *)
+and unify_row_kind_sub used env row1 row2 =
+  unify_row_kind_pair env row1 row2;
+  go_sub used env row1;
+
+and unify_row_kind env row1 row2 =
+  unify_row_kind_pair env row1 row2;
+  begin
+    match !unify_relation with
+    | Left | Equal | Unknown ->
+        go_up (ref []) env row1;
+        go_sub (ref []) env row2;
+    | Right -> ()
+  end;
+  begin
+    match !unify_relation with
+    | Right | Equal | Unknown ->
+        go_up (ref []) env row2;
+        go_sub (ref []) env row1;
+    | Left -> ()
+  end
+
+and unify_row env row1 row2 =
+  unify_row_kind env row1 row2;
+  add_polyvariant_constraint ~from:"unify_row" (relation_coerce ()) row1 row2
 
 let unify env ty1 ty2 =
   let snap = Btype.snapshot () in
@@ -2921,8 +2961,8 @@ let unify_pairs env ty1 ty2 pairs =
   univar_pairs := pairs;
   unify env ty1 ty2
 
-let unify ?(v = Unknown) env ty1 ty2 =
-  set_u_variance v (fun _ -> unify_pairs (ref env) ty1 ty2 [])
+let unify ?(relation = Unknown) env ty1 ty2 =
+  set_unify_relation relation (fun _ -> unify_pairs (ref env) ty1 ty2 [])
 
 
 
@@ -3740,23 +3780,7 @@ and eqtype_kind k1 k2 =
 
 and eqtype_row rename type_pairs subst env row1 row2 =
   (* Try expansion, needed when called from Includecore.type_manifest *)
-  let r1, r2, pairs = merge_row_fields (row_fields row1) (row_fields row2) in
-  begin
-    match r1, r2 with
-    | _::_, _ -> raise_for Equality (Variant (No_tags (Second, r1)))
-    | _, _::_ -> raise_for Equality (Variant (No_tags (First,  r2)))
-    | _, _ -> ()
-  end;
-  begin
-    match filter_row_fields false r1 with
-    | [] -> ();
-    | _ :: _ as r1 -> raise_for Equality (Variant (No_tags (Second, r1)))
-  end;
-  begin
-    match filter_row_fields false r2 with
-    | [] -> ()
-    | _ :: _ as r2 -> raise_for Equality (Variant (No_tags (First, r2)))
-  end;
+  let _r1, _r2, pairs = merge_row_fields (row_kind row1) (row_kind row2) in
   List.iter
     (fun (l,f1,f2) ->
        if f1 == f2 then () else
@@ -4226,16 +4250,7 @@ let rec build_subtype env (visited : transient_expr list)
       with Not_found ->
         (t, Unchanged)
       end
-  | Tvariant row ->
-      let tt = Transient_expr.repr t in
-      if memq_warn tt visited || not (static_row row) then (t, Unchanged) else
-      let fields = row_fields row in
-      let set_data = mk_set_unknown "build_subtype" in
-      let row =
-        create_row ~set_data ~fields ~fixed:None ~name:None
-      in
-      (newty (Tvariant row), Changed)
-  | Tsetop _ | Ttags _ -> assert false
+  | Tvariant _ -> (t, Unchanged)
   | Tobject (t1, _) ->
       let tt = Transient_expr.repr t in
       if memq_warn tt visited || opened_object t1 then (t, Unchanged) else
@@ -4463,12 +4478,12 @@ and subtype_fields env trace ty1 ty2 cstrs =
          cstrs)
     cstrs pairs
 
-and subtype_row env trace row1 row2 cstrs =
-  Printf.eprintf "subtype_row\n";
-  let row1_fields = row_fields row1 in
-  let row2_fields = row_fields row2 in
-  let r1, _r2, pairs = merge_row_fields row1_fields row2_fields in
-  if r1 != [] then raise Exit else
+(* romanv: coersions prohibited *)
+and subtype_row _env _trace _row1 _row2 _cstrs = raise Exit
+  (* Printf.eprintf "subtype_row\n";
+  let row1_kind = row_kind row1 in
+  let row2_kind = row_kind row2 in
+  let _r1, _r2, pairs = merge_row_fields row1_kind row2_kind in
   List.fold_left
     (fun cstrs (_, t1, t2) ->
       match t1, t2 with
@@ -4476,7 +4491,7 @@ and subtype_row env trace row1 row2 cstrs =
       | None, None -> cstrs
       | _ -> raise Exit)
     cstrs
-    pairs
+    pairs *)
 
 let subtype env ty1 ty2 =
   TypePairs.clear subtypes;
@@ -4518,12 +4533,8 @@ let unalias ty =
   match get_desc ty with
     Tvar _ | Tunivar _ ->
       ty
-  | Tvariant row ->
-      let Row {fields; name; fixed} = row_repr row in
-      let set_data = cp_set_data "unalias" row in
-      newty2 ~level
-        (Tvariant
-           (create_row ~fields ~name ~fixed ~set_data))
+  | Tvariant _ ->
+      ty
   | Tobject (ty, nm) ->
       newty2 ~level (Tobject (unalias_object ty, nm))
   | desc ->
@@ -4899,74 +4910,3 @@ let immediacy env typ =
        Maybe we should emit a warning. *)
     end
   | _ -> Type_immediacy.Unknown
-
-
-let rec solve_type ty =
-  let context = ref [] in
-  let visited = Hashtbl.create 13 in
-  let rec solve_type_context ty =
-    if Hashtbl.mem visited (get_id ty) then () else begin
-    Hashtbl.add visited (get_id ty) ();
-    let set_id =
-      match get_desc ty with
-      | Tvariant row -> Some (row_set_id row)
-      | _ -> None
-    in
-    (match get_desc ty with
-    | Tvariant row ->
-        let solution = solve_set_type_with_context (List.map fst !context) row in
-        Printf.printf "%s\n" (dump_solution solution);
-        let get_field l = get_row_field l row in
-        let newty = newty3 ~level:(get_level ty) ~scope:(get_scope ty) in
-        let new_ty = build_desc_from_solution get_field newty context solution in
-        set_type_desc ty (get_desc new_ty)
-    | _ -> ());
-    (match set_id with
-    | Some set_id ->
-        context := (set_id, ty) :: !context
-    | None -> ());
-    Btype.iter_type_expr solve_type_context ty
-    end in
-  solve_type_context ty
-
-and dump_solution solution : string =
-  match solution with
-  | SSUnion (l, r) -> Printf.sprintf "%s | %s" (dump_solution l) (dump_solution r)
-  | SSIntersection (l, r) -> Printf.sprintf "%s & %s" (dump_solution l) (dump_solution r)
-  | SSTags (_, _) -> "Tags..."
-  | SSVariable _ -> "Var"
-  | SSFail -> "Fail"
-
-and build_desc_from_solution get_field newty context solution =
-  let re = build_desc_from_solution get_field newty context in
-  match solution with
-  | SSUnion (l, r) -> newty (Tsetop (Union, re l, re r))
-  | SSIntersection (l, r) -> newty (Tsetop (Intersection, re l, re r))
-  | SSTags (lb, ub) ->
-    begin
-      match lb, ub with
-      | Some lb, Some ub ->
-          newty (
-            Ttags (
-              List.map
-                (fun l ->
-                  (l, List.mem l lb, Option.get @@ get_field l))
-                ub))
-      | None, Some ub ->
-          newty (
-            Ttags (
-              List.map
-                (fun l ->
-                  (l, false, Option.get @@ get_field l))
-                ub))
-      | Some lb, None ->
-          newty (
-            Ttags (
-              List.map
-                (fun l ->
-                  (l, true, Option.get @@ get_field l))
-                lb))
-      | None, None -> newty (Ttags [])
-    end
-  | SSVariable id -> List.assq id !context
-  | SSFail -> assert false

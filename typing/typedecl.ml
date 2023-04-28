@@ -1645,7 +1645,7 @@ let explain_unbound_single ppf tv ty =
       explain_unbound ppf tv tl (fun (_,_,t) -> t)
         "method" (fun (lab,_,_) -> lab ^ ": ")
   | Tvariant row ->
-      explain_unbound ppf tv (row_fields row)
+      explain_unbound ppf tv (row_kind row)
         (fun (_l,oty) -> match oty with
         | Some t -> t
         | _ -> Btype.newgenty (Ttuple[]))

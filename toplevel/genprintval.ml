@@ -460,7 +460,7 @@ module Make(O : OBJ)(EVP : EVALPATH with type valu = O.t) = struct
                         | None -> find fields
                       else find fields
                   | [] -> Oval_stuff "<variant>" in
-                find (row_fields row)
+                find (row_kind row)
               else
                 let tag : int = O.obj obj in
                 let rec find = function
@@ -469,8 +469,7 @@ module Make(O : OBJ)(EVP : EVALPATH with type valu = O.t) = struct
                         Oval_variant (l, None)
                       else find fields
                   | [] -> Oval_stuff "<variant>" in
-                find (row_fields row)
-          | Tsetop _ | Ttags _ -> assert false
+                find (row_kind row)
           | Tobject (_, _) ->
               Oval_stuff "<obj>"
           | Tsubst _ | Tfield(_, _, _, _) | Tnil | Tlink _ ->

@@ -342,7 +342,7 @@ let unify_exp_types loc env ty expected_ty =
   (* Format.eprintf "@[%a@ %a@]@." Printtyp.raw_type_expr exp.exp_type
     Printtyp.raw_type_expr expected_ty; *)
   try
-    unify ~v:Right env ty expected_ty
+    unify ~relation:Right env ty expected_ty
   with
     Unify err ->
       raise(Error(loc, env, Expr_type_clash(err, None, None)))
@@ -366,7 +366,7 @@ let unify_pat_types_return_equated_pairs ?(refine = None) loc env ty ty' =
         unify_gadt ~equations_level:(get_gadt_equations_level ())
           ~allow_recursive env ty ty'
     | None ->
-        unify ~v:Soft !env ty ty';
+        unify ~relation:Equal !env ty ty';
         nothing_equated
   with
   | Unify err ->
@@ -541,9 +541,9 @@ and build_as_type_aux ~refine (env : Env.t ref) p =
       ty_res
   | Tpat_variant(l, p', _) ->
       let ty = Option.map (build_as_type env) p' in
-      let fields = [l, ty] in
-      let set_data = mk_set_var_tags "build_as_type_aux" [l] in
-      newty (Tvariant (create_row ~fields ~name:None ~fixed:None ~set_data))
+      let kind = [l, ty] in
+      let row = create_row ~from:"build_as_type_aux" ~kind ~name:None ~fixed:None in
+      newty (Tvariant row)
   | Tpat_record (lpl,_) ->
       let lbl = snd3 (List.hd lpl) in
       if lbl.lbl_private = Private then p.pat_type else
@@ -566,17 +566,10 @@ and build_as_type_aux ~refine (env : Env.t ref) p =
         end in
       Array.iter do_label lbl.lbl_all;
       ty
-  | Tpat_or(p1, p2, row) ->
-      begin match row with
-        None ->
-          let ty1 = build_as_type env p1 and ty2 = build_as_type env p2 in
-          unify_pat ~refine env {p2 with pat_type = ty2} ty1;
-          ty1
-      | Some row ->
-          let Row {fields; fixed; name} = row_repr row in
-          let set_data = cp_set_data "build_as_type_aux" row in
-          newty (Tvariant (create_row ~fields ~fixed ~name ~set_data))
-      end
+  | Tpat_or(p1, p2, _) ->
+      let ty1 = build_as_type env p1 and ty2 = build_as_type env p2 in
+      unify_pat ~refine env {p2 with pat_type = ty2} ty1;
+      ty1
   | Tpat_any | Tpat_var _ | Tpat_constant _
   | Tpat_array _ | Tpat_lazy _ -> p.pat_type
 
@@ -761,10 +754,9 @@ let solve_Ppat_constraint ~refine loc env sty expected_ty =
 
 let solve_Ppat_variant ~refine loc env tag no_arg expected_ty =
   let arg_type = if no_arg then None else Some (newgenvar()) in
-  let fields = [tag, arg_type] in
+  let kind = [tag, arg_type] in
   let make_row () =
-    let set_data = mk_set_var "solve_Ppat_variant" in
-    create_row ~fields ~fixed:None ~name:None ~set_data
+    create_row ~from:"solve_Ppat_variant" ~kind ~fixed:None ~name:None
   in
   let row = make_row () in
   let expected_ty = generic_instance expected_ty in
@@ -784,6 +776,7 @@ let build_or_pat env loc lid =
       Tvariant row when static_row row -> row
     | _ -> raise(Error(lid.loc, env, Not_a_polymorphic_variant_type lid.txt))
   in
+  let kind = row_kind row0 in
   let pats =
     List.fold_left
       (fun pats (l,f) ->
@@ -794,12 +787,10 @@ let build_or_pat env loc lid =
             (l, Some {pat_desc=Tpat_any; pat_loc=Location.none; pat_env=env;
                       pat_type=ty; pat_extra=[]; pat_attributes=[]})
             :: pats)
-      [] (row_fields row0) in
-  let fields = row_fields row0 in
+      [] kind in
   let name = Some (path, tyl) in
-  let set_data = mk_set_unknown "build_or_pat" in
   let make_row () =
-    create_row ~fields ~fixed:None ~name ~set_data in
+    create_row ~from:"build_or_pat" ~kind ~fixed:None ~name in
   let ty = newty (Tvariant (make_row ())) in
   let gloc = {loc with Location.loc_ghost=true} in
   let row' = ref (make_row ()) in
@@ -2666,8 +2657,8 @@ let may_contain_gadts p =
    | _ -> false)
   p
 
-let check_absent_variant env =
-  iter_general_pattern { f = fun (type k) (pat : k general_pattern) ->
+let check_absent_variant _env _gp = ()
+  (* iter_general_pattern { f = fun (type k) (pat : k general_pattern) ->
     match pat.pat_desc with
     | Tpat_variant (s, arg, row) ->
       let row = !row in
@@ -2683,7 +2674,7 @@ let check_absent_variant env =
       (* Should fail *)
       unify_pat (ref env) {pat with pat_type = newty (Tvariant row')}
                           (correct_levels pat.pat_type)
-    | _ -> () }
+    | _ -> () } *)
 
 (* Getting proper location of already typed expressions.
 
@@ -3070,13 +3061,12 @@ and type_expect_
       with Exit ->
         let arg = Option.map (type_exp env) sarg in
         let arg_type = Option.map (fun arg -> arg.exp_type) arg in
-        let set_data = mk_set_var_tags "type_expect_" [l] in
         let row =
           create_row
-            ~fields: [l, arg_type]
+            ~from: "type_expect_"
+            ~kind: [l, arg_type]
             ~fixed:  None
             ~name:   None
-            ~set_data
         in
         rue {
           exp_desc = Texp_variant(l, arg);
@@ -3387,7 +3377,7 @@ and type_expect_
                   let snap = snapshot () in
                   let ty, _b = enlarge_type env ty' in
                   try
-                    force (); Ctype.unify ~v:Right env arg.exp_type ty; true (* romanv: To validate variance *)
+                    force (); Ctype.unify ~relation:Right env arg.exp_type ty; true (* romanv: To validate variance *)
                   with Unify _ ->
                     backtrack snap; false
                 then ()
@@ -3404,7 +3394,7 @@ and type_expect_
             | _ ->
                 let ty, b = enlarge_type env ty' in
                 force ();
-                begin try Ctype.unify ~v:Right env arg.exp_type ty with Unify err ->
+                begin try Ctype.unify ~relation:Right env arg.exp_type ty with Unify err ->
                   let expanded = full_expand ~may_forget_scope:true env ty' in
                   raise(Error(sarg.pexp_loc, env,
                               Coercion_failure({ty = ty'; expanded}, err, b)))
@@ -3998,7 +3988,7 @@ and type_function ?(in_function : (Location.t * type_expr) option)
     if is_optional arg_label then
       let tv = newvar() in
       begin
-        try unify ~v:Right env ty_arg (type_option tv)
+        try unify ~relation:Right env ty_arg (type_option tv)
         with Unify _ -> assert false
       end;
       type_option tv
@@ -4312,7 +4302,7 @@ and type_label_exp create env loc ty_expected
     generalize_structure ty_res
   end;
   begin try
-    unify ~v:Right env (instance ty_res) (instance ty_expected)
+    unify ~relation:Right env (instance ty_res) (instance ty_expected)
   with Unify err ->
     raise (Error(lid.loc, env, Label_mismatch(lid.txt, err)))
   end;
@@ -5325,7 +5315,7 @@ and type_andops env sarg sands expected_ty =
         let let_arg, rest = loop env let_sarg rest ty_rest in
         let exp = type_expect env sexp (mk_expected ty_arg) in
         begin try
-          unify  ~v:Right env (instance ty_result) (instance expected_ty)
+          unify  ~relation:Right env (instance ty_result) (instance expected_ty)
         with Unify err ->
           raise(Error(loc, env, Bindings_type_clash(err)))
         end;

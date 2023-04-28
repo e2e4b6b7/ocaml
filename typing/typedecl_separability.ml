@@ -143,7 +143,6 @@ let rec immediate_subtypes : type_expr -> type_expr list = fun ty ->
       immediate_subtypes_object_row class_subtys row
   | Tvariant(row) ->
       immediate_subtypes_variant_row [] row
-  | Tsetop _ | Ttags _ -> assert false
 
   (* the cases below are not called from [check_type],
      they are here for completeness *)
@@ -167,7 +166,7 @@ and immediate_subtypes_variant_row acc desc =
   let add_subtypes acc =
     let add_subtype acc (_l, rf) =
       immediate_subtypes_variant_row_field acc rf in
-    List.fold_left add_subtype acc (row_fields desc) in
+    List.fold_left add_subtype acc (row_kind desc) in
   add_subtypes acc
 
 and immediate_subtypes_variant_row_field acc oty =
@@ -446,8 +445,6 @@ let check_type
             | Deepsep -> Hyps.poison hyps in
           context ++ check_type hyps ty (compose m m_param) in
         List.fold_left on_param empty (List.combine tys msig)
-    | (Tsetop _, _)
-    | (Ttags _, _) -> assert false
   in
   check_type Hyps.empty ty m
 
