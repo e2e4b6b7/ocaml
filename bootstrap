@@ -1,7 +1,7 @@
 #!/bin/bash
 # romanv automation script
 
-./clean
+./clean || exit
 
 git checkout 4.14 || exit
 git checkout HEAD -- boot || exit
@@ -9,7 +9,7 @@ git checkout HEAD -- boot || exit
 make partialclean -j || exit
 ### or
 # make clean -j || exit
-# ./configure CC=gcc CFLAGS="-Wno-strict-prototypes -Wno-unused-but-set-variable" || exit
+# ./configure CFLAGS="-Wno-strict-prototypes -Wno-unused-but-set-variable" || exit
 ##########################################
 make world.opt -j || exit
 
