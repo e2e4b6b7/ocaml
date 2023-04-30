@@ -10,11 +10,13 @@
    | `C :: _ -> List.hd y
    | [] -> `B;; *)
 
-let id2 x = match x with `A | `B -> x;;
+(* let c = `C;; *)
 
-let lst = [id2 `A; `C];;
+(* let id2 x = match x with `A | `B -> x;; *)
 
-let f1 y =
+let lst = [`A; `C];;
+
+(* let f1 y =
    match y with
    | `A -> `C
    | `B -> `D
@@ -28,7 +30,7 @@ let v1 = f1 `D
 
 let v2 = f2 `D
 
-let f3 = f2
+let f3 = f2 *)
 
 (* let ff' y =
    match y with

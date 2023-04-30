@@ -62,7 +62,7 @@ type commutable
 
 (* romanv: should be splitted
            or marked with polyvariants parameter
-          but it requires lots of work *)
+           but it requires lots of work *)
 type type_desc =
   | Tvar of string option
   (** [Tvar (Some "a")] ==> ['a] or ['_a]
@@ -343,7 +343,8 @@ val row_closed: row_desc -> bool
 val row_debug_info: row_desc -> string * int
 
 val set_row_name: row_desc -> (Path.t * type_expr list) option -> row_desc
-val update_row_kind: row_desc -> row_kind -> unit
+val merge_row_kinds:
+  (row_kind -> row_kind -> row_kind) -> row_desc -> row_desc -> unit
 
 val get_row_field: label -> row_desc -> type_expr option option
 

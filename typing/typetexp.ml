@@ -393,7 +393,8 @@ and transl_type_aux env policy styp =
           if l <> l' then raise(Error(styp.ptyp_loc, env, Variant_tags(l, l')));
           let ty = mkfield l oty and ty' = mkfield l oty' in
           if is_equal env false [ty] [ty'] then () else
-          try unify ~relation:Equal env ty ty'
+          try
+            unify ~relation:Equal env ty ty'
           with Unify _trace ->
             raise(Error(loc, env, Constructor_mismatch (ty,ty')))
         with Not_found ->

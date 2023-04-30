@@ -759,7 +759,7 @@ let solve_Ppat_variant ~refine loc env tag no_arg expected_ty =
     create_row ~from:"solve_Ppat_variant" ~kind ~fixed:None ~name:None
   in
   let row = make_row () in
-  let expected_ty = generic_instance expected_ty in
+  (* let expected_ty = generic_instance expected_ty in *)
   (* PR#7404: allow some_private_tag blindly, as it would not unify with
      the abstract row variable *)
   if tag <> Parmatch.some_private_tag then
@@ -3068,6 +3068,7 @@ and type_expect_
             ~fixed:  None
             ~name:   None
         in
+        add_polyvariant_tags_constrint Left row [l];
         rue {
           exp_desc = Texp_variant(l, arg);
           exp_loc = loc; exp_extra = [];

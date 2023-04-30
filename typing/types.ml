@@ -44,10 +44,14 @@ and type_desc =
 
 and constraint_relation = Left | Right | Equal | Unknown
 
+and 'a dsf =
+  | DsfLink of 'a dsf ref
+  | DsfValue of 'a
+
 and row_kind = (label * type_expr option) list
 
 and row_desc =
-    { mutable row_kind: row_kind;
+    { row_kind: row_kind dsf;
       row_fixed: fixed_explanation option;
       row_name: (Path.t * type_expr list) option;
       debug_info: (string (* from *) * int (* debug id *)) }
@@ -554,6 +558,31 @@ let compare_type t1 t2 = compare (get_id t1) (get_id t2)
 
 (* Constructor and accessors for [row_desc] *)
 
+let dsf_init v = DsfLink (ref (DsfValue v))
+
+let rec dsf_get dsf =
+  match dsf with
+  | DsfLink dsf -> dsf_get !dsf
+  | DsfValue v -> v
+
+let dsf_merge f dsf dsf' =
+  let rec last_link dsf =
+    match dsf with
+    | DsfLink v_ref -> begin
+        match !v_ref with
+        | DsfLink _ as dsf -> last_link dsf
+        | DsfValue v -> v, v_ref
+      end
+    | DsfValue _ -> assert false in
+  let v, v_ref = last_link dsf in
+  let v', v_ref' = last_link dsf' in
+  if v_ref == v_ref' then () else
+  let v = f v v' in
+  let dsf_v = ref (DsfValue v) in
+  v_ref := DsfLink dsf_v;
+  v_ref' := DsfLink dsf_v;
+  assert (dsf_get dsf == dsf_get dsf')
+
 type set_solution =
   | SSUnion of set_solution * set_solution
   | SSIntersection of set_solution * set_solution
@@ -586,11 +615,13 @@ let sprint_constraint_relation v = match v with
   | Unknown -> "Unknown"
 
 let sprint_tags tags = String.concat "" ["[";String.concat "," tags;"]"]
+let sprint_row_id {debug_info=(_, id)} = Printf.sprintf "%d" id
+let sprint_row_ids rows = String.concat "," @@ List.map sprint_row_id rows
 
 let sprint_row row =
   let (from, id) = row.debug_info in
   Printf.sprintf "Row %d from %s kind %s" id from
-    (sprint_tags @@ List.map fst row.row_kind)
+    (sprint_tags @@ List.map fst (dsf_get row.row_kind))
 
 let sprint_constrained_ty ty =
   match get_desc ty with
@@ -599,10 +630,15 @@ let sprint_constrained_ty ty =
   | _ -> assert false
 
 let _add_constraint relation v1 v2 constraints =
+  let add ((l, r) as c) cs =
+    if List.exists (fun (l', r') -> l' == l && r' == r) cs
+      then cs
+      else c :: cs
+  in
   constraints := match relation with
-  | Left -> (v1, v2) :: !constraints
-  | Right -> (v2, v1) :: !constraints
-  | Equal | Unknown -> (v1, v2) :: (v2, v1) :: !constraints
+  | Left -> add (v1, v2) !constraints
+  | Right -> add (v2, v1) !constraints
+  | Equal | Unknown -> add (v1, v2) @@ add (v2, v1) !constraints
 
 let log_new_polyvariant_constraint from relation row1 row2 =
   Printf.fprintf dump "From: %s; Variance: %s\n" from (sprint_constraint_relation relation);
@@ -667,15 +703,27 @@ let exclude_listsq l1 l2 = List.filter (fun id -> not @@ List.memq id l2) l1
 
 (* exception Romanv of string *)
 
+module RowDescHtbl = Hashtbl.Make(struct
+  type t = row_desc
+  let equal = (==)
+  let hash = Hashtbl.hash
+end)
+
+let sprint_htbl pref htbl kp pv =
+  Printf.fprintf dump "Htbl %s:\n" pref;
+  RowDescHtbl.iter (fun k v -> Printf.fprintf dump "%s: %s\n" (kp k) (pv v)) htbl;
+  Printf.fprintf dump "\n";
+  flush stdout
+
 (** edges = ((edges_var_ub, edges_tag_ub), (edges_var_lb, edges_tag_lb)) *)
 
 let collect_tag_edges constraints merge =
-  let edges_tag = Hashtbl.create 13 in
+  let edges_tag = RowDescHtbl.create 13 in
   List.iter
     (fun (row, tags) ->
-      match Hashtbl.find_opt edges_tag row with
-      | None -> Hashtbl.add edges_tag row tags
-      | Some tags' -> Hashtbl.replace edges_tag row (merge tags tags'))
+      match RowDescHtbl.find_opt edges_tag row with
+      | None -> RowDescHtbl.add edges_tag row tags
+      | Some tags' -> RowDescHtbl.replace edges_tag row (merge tags tags'))
     constraints;
   edges_tag
 
@@ -687,12 +735,12 @@ let collect_tag_lb_edges () =
 
 let collect_var_edges () =
   let constraints = !polyvariants_constraints in
-  let edges_var_ub = Hashtbl.create 13 in
-  let edges_var_lb = Hashtbl.create 13 in
+  let edges_var_ub = RowDescHtbl.create 13 in
+  let edges_var_lb = RowDescHtbl.create 13 in
   let add_constraint htbl row1 row2 =
-    match Hashtbl.find_opt htbl row1 with
-    | None -> Hashtbl.add htbl row1 [row2]
-    | Some rows -> Hashtbl.replace htbl row1 (row2 :: rows) in
+    match RowDescHtbl.find_opt htbl row1 with
+    | None -> RowDescHtbl.add htbl row1 [row2]
+    | Some rows -> RowDescHtbl.replace htbl row1 (row2 :: rows) in
   List.iter
     (fun (row1, row2) ->
       add_constraint edges_var_ub row1 row2;
@@ -708,77 +756,95 @@ let collect_edges () =
 
 (* romanv: Maybe we can merge this components in single type for performance *)
 let find_components ((edges, _), _) =
-  let reachable = Hashtbl.create 17 in
+  let reachable = RowDescHtbl.create 17 in
   let rec calc_reachable used id =
-    if Hashtbl.mem used id then [] else begin
-    Hashtbl.add used id ();
-    match Hashtbl.find_opt reachable id with
+    if RowDescHtbl.mem used id then [] else begin
+    RowDescHtbl.add used id ();
+    match RowDescHtbl.find_opt reachable id with
     | Some reacheble -> reacheble
     | None ->
-        let direct = Hashtbl.find_opt edges id in
+        let direct = RowDescHtbl.find_opt edges id in
         let direct = Option.value direct ~default:[] in
         let indirect = List.map (calc_reachable used) direct in
         uniq (List.append direct (List.concat indirect))
     end
   in
-  Hashtbl.iter
-    (fun id _ -> Hashtbl.add reachable id (calc_reachable (Hashtbl.create 17) id))
+  RowDescHtbl.iter
+    (fun id _ -> RowDescHtbl.add reachable id (calc_reachable (RowDescHtbl.create 17) id))
     edges;
-  let connected = Hashtbl.create 17 in
-  Hashtbl.iter
+  let connected = RowDescHtbl.create 17 in
+  RowDescHtbl.iter
     (fun id1 reachable1 ->
       List.iter
         (fun id2 ->
           if not (id1 == id2) then
-            let reachable2 = Hashtbl.find_opt reachable id2 in
+            let reachable2 = RowDescHtbl.find_opt reachable id2 in
             let reachable2 = Option.value reachable2 ~default:[] in
             if List.memq id1 reachable2 then
-              match Hashtbl.find_opt connected id1 with
-              | None -> Hashtbl.add connected id1 [id2]
-              | Some prev -> (Hashtbl.replace connected id1 (id2 :: prev)))
+              match RowDescHtbl.find_opt connected id1 with
+              | None -> RowDescHtbl.add connected id1 [id2]
+              | Some prev -> (RowDescHtbl.replace connected id1 (id2 :: prev)))
         reachable1)
     edges;
   connected
 
-let transform_edges_ edges connected =
-  let edges = Hashtbl.copy edges in
-  Hashtbl.iter
+let transform_edges_vars edges connected =
+  let edges = RowDescHtbl.copy edges in
+  RowDescHtbl.iter
     (fun id edg ->
-      if Hashtbl.mem connected id then begin
-        let conn = Hashtbl.find connected id in
+      if RowDescHtbl.mem connected id then begin
+        let conn = RowDescHtbl.find connected id in
         let new_edg = exclude_listsq edg conn in
-        Hashtbl.replace edges id new_edg
+        if new_edg = []
+          then RowDescHtbl.remove edges id
+          else RowDescHtbl.replace edges id new_edg
       end)
     edges;
-  Hashtbl.iter
-    (fun id edg ->
-      if Hashtbl.mem connected id then begin
-        let con = Hashtbl.find connected id in
+  RowDescHtbl.iter
+    (fun row con ->
         let get_edges row =
-          Option.value (Hashtbl.find_opt edges row) ~default:[] in
+          Option.value (RowDescHtbl.find_opt edges row) ~default:[] in
         let transitive_edges = List.concat @@ List.map get_edges con in
-        let new_edges = uniq (List.append transitive_edges edg) in
-        Hashtbl.replace edges id new_edges
-      end)
-    edges;
+        let new_edges = uniq (List.append transitive_edges (get_edges row)) in
+        if new_edges = []
+          then RowDescHtbl.remove edges row
+          else RowDescHtbl.replace edges row new_edges)
+    connected;
   edges
 
-let transform_edges ((edges_lb, lb'), (edges_ub, ub')) connected =
-  (transform_edges_ edges_lb connected, lb'),
-  (transform_edges_ edges_ub connected, ub')
+let transform_edges_tags edges connected =
+  let edges = RowDescHtbl.copy edges in
+  RowDescHtbl.iter
+    (fun row con ->
+        let get_edges row =
+          Option.value (RowDescHtbl.find_opt edges row) ~default:[] in
+        let transitive_edges = List.concat @@ List.map get_edges con in
+        let new_edges = uniq (List.append transitive_edges (get_edges row)) in
+        if new_edges = []
+          then RowDescHtbl.remove edges row
+          else RowDescHtbl.replace edges row new_edges)
+    connected;
+  edges
+
+let transform_edges
+  ((edges_lb_vars, edges_lb_tags), (edges_ub_vars, edges_ub_tags)) connected =
+  (transform_edges_vars edges_lb_vars connected,
+   transform_edges_tags edges_lb_tags connected),
+  (transform_edges_vars edges_ub_vars connected,
+   transform_edges_tags edges_ub_tags connected)
 
 let transform_context context connected =
-  let equal row = Option.value (Hashtbl.find_opt connected row) ~default:[] in
+  let equal row = Option.value (RowDescHtbl.find_opt connected row) ~default:[] in
   let new_context = List.concat @@ List.map equal context in
   uniq @@ List.append context new_context
 
 let solve_for_with_context_ solve_rec merge (edges_var, edges_tag) row =
   let vars_solution =
-    let vars_bound = Hashtbl.find_opt edges_var row in
+    let vars_bound = RowDescHtbl.find_opt edges_var row in
     let vars_bound = Option.value vars_bound ~default:[] in
     List.map solve_rec vars_bound in
   let tags_solution =
-    let tags = Hashtbl.find_opt edges_tag row in
+    let tags = RowDescHtbl.find_opt edges_tag row in
     { tags; variables = [] }
   in
   List.fold_left merge tags_solution vars_solution
@@ -855,10 +921,24 @@ let solve_set_type_with_context context row =
 (* romanv: Could be solved much faster in case of empty context *)
 let solve_set_type row =
   match solve_set_type_with_context [] row with
-  | SSTags (lb, ub) -> lb, ub
+  | SSTags (lb, ub) ->
+      Printf.fprintf dump "SOLVED %s\n" (sprint_row row);
+      let lb' = Option.value (Option.map sprint_tags lb) ~default:"-" in
+      let ub' = Option.value (Option.map sprint_tags ub) ~default:"-" in
+      Printf.fprintf dump "lb: %s\nub: %s\n\n" lb' ub';
+      lb, ub
   | _ -> assert false
 
+(* exception RV *)
+
 let cp_rows (rows : (row_desc * row_desc) list) : unit =
+  List.iter
+    (fun (from_row, to_row) ->
+      let (_, from_id) = from_row.debug_info in
+      let (_, to_id) = to_row.debug_info in
+      (* if from_id == 8 && to_id == 14 then raise RV; *)
+      Printf.fprintf dump "COPY: %d -> %d\n" from_id to_id)
+    rows;
   let context = List.map fst rows in
   let solve (from, _to) =
     let context = List.filter (fun row -> not (row == from)) context in
@@ -888,7 +968,7 @@ let new_id () = cur_id := !cur_id + 1; !cur_id
 
 let create_row ~from ~kind ~fixed ~name : row_desc =
   let debug_info = (from, new_id ()) in
-  { row_kind=kind; row_fixed=fixed;
+  { row_kind=dsf_init kind; row_fixed=fixed;
     row_name=name; debug_info }
 
 (* [row_fields] subsumes the original [row_repr] *)
@@ -896,7 +976,7 @@ let row_fields_ub row =
   match solve_set_type row with
   | _, Some tags -> Some (List.map (
       fun tag -> tag,
-        let oty = List.assoc_opt tag row.row_kind in
+        let oty = List.assoc_opt tag (dsf_get row.row_kind) in
         match oty with
         | Some ty -> ty
         | None ->
@@ -906,10 +986,10 @@ let row_fields_ub row =
 
 let row_fields_lb row =
   match solve_set_type row with
-  | Some tags, _ -> List.map (fun tag -> tag, List.assoc tag row.row_kind) tags
+  | Some tags, _ -> List.map (fun tag -> tag, List.assoc tag (dsf_get row.row_kind)) tags
   | None, _ -> []
 
-let row_kind row = row.row_kind
+let row_kind row = dsf_get row.row_kind
 let row_fixed row = row.row_fixed
 let row_name row = row.row_name
 let row_debug_info row = row.debug_info
@@ -920,10 +1000,10 @@ let row_closed row =
   | _, None -> false
 
 let get_row_field tag row =
-  List.assoc_opt tag row.row_kind
+  List.assoc_opt tag (dsf_get row.row_kind)
 
-let update_row_kind row kind =
-  row.row_kind <- kind
+let merge_row_kinds f row row' =
+  dsf_merge f row.row_kind row'.row_kind
 
 let set_row_name row row_name =
   { row with row_name }
@@ -936,7 +1016,7 @@ type row_desc_repr =
 
 let row_repr row =
   let closed = row_closed row in
-  Row { kind = row.row_kind;
+  Row { kind = dsf_get row.row_kind;
         closed;
         fixed = row.row_fixed;
         name = row.row_name }
@@ -996,7 +1076,7 @@ let link_type ty ty' =
   let ty' = repr ty' in
   if ty == ty' then () else begin
   log_type ty;
-  (* dump_link ty ty'; *)
+  dump_link ty ty';
   let desc = ty.desc in
   Transient_expr.set_desc ty (Tlink ty');
   (* Name is a user-supplied name for this unification variable (obtained
