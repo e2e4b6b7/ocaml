@@ -1324,6 +1324,7 @@ and specialize_and_exhaust ext pss n =
             Seq.map (set_args p) sub_witnesses
         in
         let try_omega () =
+          (* Printf.printf "specialize_and_exhaust\n"; *)
           if full_match false constrs && not (_should_extend ext constrs) then
             Seq.empty
           else

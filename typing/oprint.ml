@@ -297,14 +297,15 @@ and print_simple_out_type ppf =
       fprintf ppf "@[<2>< %a >@]" (print_fields rest) fields
   | Otyp_stuff s -> pp_print_string ppf s
   | Otyp_var (ng, s) -> pr_var ppf (if ng then "_" ^ s else s)
-  | Otyp_variant (debug, fields) ->
+  | Otyp_variant fields -> begin
       let print_fields =
         print_list print_row_field (fun ppf -> fprintf ppf "@;<1 -2>| ")
       in
-      let debug = if debug = "" then "" else Printf.sprintf "!%s! " debug in
-      fprintf ppf "%s@[<hov>[@[<hv>%a@]@ ]@]"
-        debug
-        print_fields fields
+      match fields with
+      | Top -> fprintf ppf "T"
+      | Tags tags ->
+          fprintf ppf "@[<hov>@[<hv>%a@]@]" print_fields tags
+    end
   | Otyp_setop (op, l, r) ->
       print_out_type ppf l;
       fprintf ppf " %s " op;
@@ -349,13 +350,17 @@ and print_fields rest ppf =
       print_fields rest ppf []
   | (s, t) :: l ->
       fprintf ppf "%s : %a;@ %a" s print_out_type t (print_fields rest) l
-and print_row_field ppf (l, tyl) =
+and print_row_field ppf (l, oty) =
   let pr_of ppf =
-    match tyl with
+    match oty with
     | Some _ -> fprintf ppf " of@ "
     | None -> fprintf ppf ""
   in
-  fprintf ppf "@[<hv 2>`%s%t%a@]" l pr_of (print_typlist print_out_type " &") (Option.to_list tyl)
+  let pr_ty ppf =
+    match oty with
+    | Some ty -> print_out_type ppf ty
+    | None -> () in
+  fprintf ppf "@[<hv 2>`%s%t%t@]" l pr_of pr_ty
 and print_typlist print_elem sep ppf =
   function
     [] -> ()

@@ -177,7 +177,7 @@ module For_copy : sig
 end
 
 val copy_row:
-  For_copy.copy_scope -> (type_expr -> type_expr) -> bool -> row_desc -> row_desc
+  For_copy.copy_scope -> (type_expr -> type_expr) -> bool -> bool -> row_desc -> row_desc
 
 
 val lowest_level: int

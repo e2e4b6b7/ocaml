@@ -457,6 +457,14 @@ and transl_type_aux env policy styp =
         ~kind:fields
         ~fixed:None
         ~name in
+      if closed = Closed then
+        add_polyvariant_tags_constrint Right row (List.map fst fields);
+      let lb =
+        match present with
+        | None -> (List.map fst fields)
+        | Some present -> present
+      in
+      add_polyvariant_tags_constrint Left row lb;
       let ty = newty (Tvariant row) in
       ctyp (Ttyp_variant (tfields, closed, present)) ty
   | Ptyp_poly(vars, st) ->

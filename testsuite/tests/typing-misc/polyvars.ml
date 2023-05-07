@@ -2,95 +2,128 @@
    * expect
 *)
 
-(* let f x = match x with `A -> `B;; *)
+let c = `C;;
+[%%expect {|
+val c : `C = `C
+|}]
 
-(* let ff y =
-   match y with
-   | `B :: _ -> `C
-   | `C :: _ -> List.hd y
-   | [] -> `B;; *)
-
-(* let c = `C;; *)
-
-(* let id2 x = match x with `A | `B -> x;; *)
 
 let lst = [`A; `C];;
+[%%expect {|
+val lst : `A | `C list = [`A; `C]
+|}]
 
-(* let f1 y =
+let f x = match x with `A -> `B
+
+let b = f `A;;
+[%%expect {|
+val f : `A -> `B = <fun>
+val b : `B = `B
+|}]
+
+let f x = match x with `A 1 -> `B "one" | `A _ -> `C ();;
+[%%expect {|
+val f : `A of int -> `B of string | `C of unit = <fun>
+|}]
+
+let id2 x = match x with `A | `B -> x
+
+let a = id2 `A
+
+let lst = [( id2 `A ); `C ];;
+[%%expect {|
+val id2 : (`A | `B as 'a) -> 'a = <fun>
+val a : `A = `A
+val lst : `A | `C list = [`A; `C]
+|}]
+
+let f y =
    match y with
    | `A -> `C
    | `B -> `D
 
-let f2 y =
+let err = f `C;;
+[%%expect {|
+val f : `A | `B -> `C | `D = <fun>
+?error?
+|}]
+
+let f y =
    match y with
    | `A -> `C
-   | y -> y;;
+   | y -> y
 
-let v1 = f1 `D
+let d = f `D;;
+[%%expect {|
+val f : (T as 'a) -> `C | 'a = <fun>
+val d : `C | `D = `D
+|}]
 
-let v2 = f2 `D
-
-let f3 = f2 *)
-
-(* let ff' y =
+let f y =
    match y with
    | `B :: _ -> `C
-   | _ :: _ -> List.hd y
-   | [] -> `B;; *)
-
-
-(* let f x = match x,x with
-| `A, _ -> 1
-| _, `A -> 2
-| `A, `A -> 2 *)
-
-
-(* let f1 x = match x with
-| `B -> `A
-| _ -> `C;;
+   | `C :: _ -> List.hd y
+   | [] -> `B;;
 [%%expect {|
-val f1 : !T! [> `B ] -> ![A,C]! [> `A | `C ] = <fun>
-|}] *)
+val f : `B | `C list -> `B | `C = <fun>
+|}]
 
-(* let f2 x = match x with
-| `B -> `A
-| x  -> x;;
+let f x =
+   match x with
+   | `B -> [`C]
+   | `A -> [x];;
 [%%expect {|
-val f2 : (!T! [> `A | `B ] as 'a) -> ?? = <fun>
-|}] *)
+val f : (`A | `B as 'a) -> `C | 'a list = <fun>
+|}]
 
-(* let f21 = f2 `C;;
-let f22 = f2 (`C 1);;
-
-let f3 = f2;; *)
-
-(* let f3 x = match x with
-| `B -> [`A]
-| `A -> [x];;
-[%%expect {|
-val f3 : (![A,B]! [< `A | `B > `A ] as 'a) -> ?? list = <fun>
-|}] *)
-
-(*
-
-let tmp = f1 `C;;
+let f f1 f2 e = f1 e || f2 e || f1 `A || f2 `B;; (* failing *)
 [%%expect {|
 |}]
 
+type t = [`A | `B]
 
+let f x =
+   match x with
+   | `C -> 1
+   | #t -> 2
+
+let f v =
+   match v with
+   | `C -> 1
+   | #t -> 2
+   | _ -> 3
+
+let f x =
+   match x with
+   | #t -> assert false;;
 [%%expect {|
+type t = [`A | `B]
+val f : `A | `B | `C -> int = <fun>
+val f : T -> int = <fun>
+val f : `A | `B -> int = <fun>
 |}]
 
-let id22 x = match x with
-| `A -> `A
-| `B -> `B
+type 'a t = {
+   field: 'a;
+}
+
+let f v =
+  match v.field with
+  | `A -> 4
+  | `B -> 5
+
+let f v =
+  match v with
+  | {field = `A} -> 4
+  | {field = `B} -> 5;;
 [%%expect {|
+type 'a t = { field : 'a; }
+val f : 'a t -> int = <fun>
+val f : 'a t -> int = <fun>
 |}]
 
-let el = id2 `A;;
-[%%expect {|
-|}]
-
-let lst = [( id2 `A ); `C ];;
-[%%expect {|
-|}] *)
+let f v = (* failing *)
+  match v, v with
+  | `A, `A -> 4
+  | _, `B -> 5
+  | _, `A -> 6

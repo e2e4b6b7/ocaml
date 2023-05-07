@@ -363,7 +363,7 @@ let unify_pat_types_return_equated_pairs ?(refine = None) loc env ty ty' =
   try
     match refine with
     | Some allow_recursive ->
-        unify_gadt ~equations_level:(get_gadt_equations_level ())
+        unify_gadt ~relation:Equal ~equations_level:(get_gadt_equations_level ())
           ~allow_recursive env ty ty'
     | None ->
         unify ~relation:Equal !env ty ty';
@@ -4455,8 +4455,8 @@ and type_argument ?explanation ?recarg env sarg ty_expected' ty_expected =
       end
   | None ->
       let texp = type_expect ?recarg env sarg
-        (mk_expected ?explanation ty_expected') in
-      unify_exp env texp ty_expected;
+        (mk_expected ?explanation ty_expected') in (* 1 *)
+      unify_exp env texp ty_expected; (* 2 *)
       texp
 
 and type_application env funct sargs =

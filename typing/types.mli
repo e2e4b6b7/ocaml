@@ -312,8 +312,12 @@ type set_solution =
 
 type constraint_relation = Left | Right | Equal | Unknown
 type row_kind = (label * type_expr option) list
+type row_kind_id
+type row_kind_class
 
 val cp_rows: (row_desc * row_desc) list -> unit
+
+val sprint_row: row_desc -> string
 
 val add_polyvariant_constraint:
   ?from:string -> constraint_relation -> row_desc -> row_desc -> unit
@@ -337,6 +341,8 @@ val create_row:
 val row_fields_ub: row_desc -> (label * type_expr option) list option
 val row_fields_lb: row_desc -> (label * type_expr option) list
 val row_kind: row_desc -> row_kind
+val row_kind_id: row_desc -> row_kind_id
+val row_kind_class: row_desc -> row_kind_class
 val row_fixed: row_desc -> fixed_explanation option
 val row_name: row_desc -> (Path.t * type_expr list) option
 val row_closed: row_desc -> bool
@@ -345,6 +351,9 @@ val row_debug_info: row_desc -> string * int
 val set_row_name: row_desc -> (Path.t * type_expr list) option -> row_desc
 val merge_row_kinds:
   (row_kind -> row_kind -> row_kind) -> row_desc -> row_desc -> unit
+val merge_row_kinds_classes:
+  (row_kind -> row_kind -> row_kind) -> row_kind_class -> row_kind_class -> unit
+
 
 val get_row_field: label -> row_desc -> type_expr option option
 

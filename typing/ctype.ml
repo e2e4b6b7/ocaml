@@ -1041,7 +1041,7 @@ let rec copy ?partial ?keep_names scope ty =
                             | abbrev  -> abbrev))
           end
       | Tvariant row ->
-          Tvariant (copy_row scope copy true row)
+          Tvariant (copy_row scope copy true true row)
       | Tobject (ty1, _) when partial <> None ->
           Tobject (copy ty1, ref None)
       | _ -> copy_type_desc ?keep_names copy desc
@@ -1263,7 +1263,7 @@ let rec copy_sep ~cleanup_scope ~fixed ~free ~bound ~may_share
       | Tvariant row ->
           (* We shall really check the level on the row variable *)
           let row =
-            copy_row cleanup_scope (copy_rec ~may_share:true) fixed row in
+            copy_row cleanup_scope (copy_rec ~may_share:true) fixed false(*romanv: not sure*) row in
           Tvariant row
       | Tpoly (t1, tl) ->
           let tl' = List.map (fun t -> newty (get_desc t)) tl in
@@ -2019,6 +2019,7 @@ let get_gadt_equations_level () =
   | None -> assert false
   | Some x -> x
 
+
 (* a local constraint can be added only if the rhs
    of the constraint does not contain any Tvars.
    They need to be removed using this function *)
@@ -2454,6 +2455,7 @@ let link_type_rel from ty ty' =
   | _ -> link_type ty ty'
   end
 
+exception RV
 
 (* force unification in Reither when one side has a non-conjunctive type *)
 let rigid_variants = ref false
@@ -2477,7 +2479,7 @@ let unify1_var env t1 t2 =
         with Escape e ->
           raise_for Unify (Escape e)
       end;
-      link_type_rel "univy1_var" t1 t2; (* romanv: linktype: sure *)
+      link_type_rel "unify1_var" t1 t2; (* romanv: linktype: sure *)
       true
   | exception Unify_trace _ when !umode = Pattern ->
       false
@@ -2543,7 +2545,9 @@ let rec unify (env:Env.t ref) t1 t2 =
     | (Tvar _, _) ->
         if unify1_var !env t1 t2 then () else unify2 env t1 t2
     | (_, Tvar _) ->
-        if unify1_var !env t2 t1 then () else unify2 env t1 t2
+        if invert_unify_relation (fun () -> unify1_var !env t2 t1)
+          then ()
+          else unify2 env t1 t2
     | (Tunivar _, Tunivar _) ->
         unify_univar_for Unify t1 t2 !univar_pairs;
         update_level_for Unify !env (get_level t1) t2;
@@ -2872,8 +2876,13 @@ and unify_row_kind env row1 row2 =
     row1 row2
 
 and unify_row env row1 row2 =
+  if Sys.file_exists "/unify_raise" && relation_coerce () = Types.Unknown then raise RV;
   unify_row_kind env row1 row2;
-  add_polyvariant_constraint ~from:"unify_row" (relation_coerce ()) row1 row2
+  add_polyvariant_constraint ~from:"unify_row" (relation_coerce ()) row1 row2;
+  let ans1 = solve_set_type_with_context [] row1 in
+  let ans2 = solve_set_type_with_context [] row2 in
+  if ans1 = SSFail || ans2 = SSFail then
+    raise_for Unify (Variant No_intersection)
 
 let unify env ty1 ty2 =
   let snap = Btype.snapshot () in
@@ -2933,6 +2942,8 @@ let unify_pairs env ty1 ty2 pairs =
 let unify ?(relation = Unknown) env ty1 ty2 =
   set_unify_relation relation (fun _ -> unify_pairs (ref env) ty1 ty2 [])
 
+let unify_gadt ?(relation = Unknown) ~equations_level:lev ~allow_recursive (env:Env.t ref) ty1 ty2 =
+  set_unify_relation relation (fun _ -> unify_gadt ~equations_level:lev ~allow_recursive env ty1 ty2)
 
 
 (**** Special cases of unification ****)

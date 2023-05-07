@@ -1151,7 +1151,7 @@ let rec tree_of_typexp_ ((solutions, used_variables) as c) mode ty =
         if used then begin
           assert (Hashtbl.mem used_variables row);
           let name = Names.new_name () in
-          Hashtbl.replace used_variables row (Some (Otyp_var (true, name)));
+          Hashtbl.replace used_variables row (Some (Otyp_var (false, name)));
           Otyp_alias (tree, name)
         end else tree
     | Tobject (fi, nm) ->
@@ -1207,13 +1207,19 @@ and tree_of_set_solution ((_, used_variables) as c) mode solution =
         | Some lb, None -> lb
         | None, None -> []
       in
+      if fields = [] then Otyp_variant Top else
       let fields =
         List.map
-        (fun (l, ty) ->
-          l, Option.map (tree_of_typexp_ c mode) ty)
-        fields
+          (fun (l, ty) ->
+            l, Option.map (tree_of_typexp_ c mode) ty)
+          fields
       in
-      Otyp_variant ("", fields)
+      let fields =
+        List.sort
+          (fun (l, _) (l', _) -> String.compare l l')
+          fields
+      in
+      Otyp_variant (Tags fields)
   | PSVariable id -> begin
       assert (Hashtbl.mem used_variables id);
       match Hashtbl.find used_variables id with

@@ -565,17 +565,18 @@ let rec dsf_get dsf =
   | DsfLink dsf -> dsf_get !dsf
   | DsfValue v -> v
 
+let rec dsf_last_link dsf =
+  match dsf with
+  | DsfLink v_ref -> begin
+      match !v_ref with
+      | DsfLink _ as dsf -> dsf_last_link dsf
+      | DsfValue v -> v, v_ref
+    end
+  | DsfValue _ -> assert false
+
 let dsf_merge f dsf dsf' =
-  let rec last_link dsf =
-    match dsf with
-    | DsfLink v_ref -> begin
-        match !v_ref with
-        | DsfLink _ as dsf -> last_link dsf
-        | DsfValue v -> v, v_ref
-      end
-    | DsfValue _ -> assert false in
-  let v, v_ref = last_link dsf in
-  let v', v_ref' = last_link dsf' in
+  let v, v_ref = dsf_last_link dsf in
+  let v', v_ref' = dsf_last_link dsf' in
   if v_ref == v_ref' then () else
   let v = f v v' in
   let dsf_v = ref (DsfValue v) in
@@ -629,6 +630,26 @@ let sprint_constrained_ty ty =
   | Tvar _ -> "TVar"
   | _ -> assert false
 
+module RowDescHtbl = Hashtbl.Make(struct
+  type t = row_desc
+  let equal = (==)
+  let hash = Hashtbl.hash
+end)
+
+
+let solution_cache = ref None
+
+let drop_cache () =
+  solution_cache := None
+
+let get_solution_cache f =
+  match !solution_cache with
+  | Some cached -> cached
+  | None ->
+      let ans = f () in
+      solution_cache := Some ans;
+      ans
+
 let _add_constraint relation v1 v2 constraints =
   let add ((l, r) as c) cs =
     if List.exists (fun (l', r') -> l' == l && r' == r) cs
@@ -636,8 +657,8 @@ let _add_constraint relation v1 v2 constraints =
       else c :: cs
   in
   constraints := match relation with
-  | Left -> add (v1, v2) !constraints
-  | Right -> add (v2, v1) !constraints
+  | Right -> add (v1, v2) !constraints
+  | Left -> add (v2, v1) !constraints
   | Equal | Unknown -> add (v1, v2) @@ add (v2, v1) !constraints
 
 let log_new_polyvariant_constraint from relation row1 row2 =
@@ -646,6 +667,7 @@ let log_new_polyvariant_constraint from relation row1 row2 =
   flush dump
 
 let add_polyvariant_constraint ?(from="Unknown source") relation row1 row2 =
+  drop_cache ();
   log_new_polyvariant_constraint from relation row1 row2;
   _add_constraint relation row1 row2 polyvariants_constraints
 
@@ -655,6 +677,7 @@ let log_new_polyvariant_tags_constraint relation row1 tags =
   flush dump
 
 let add_polyvariant_tags_constrint relation row tags =
+  drop_cache ();
   log_new_polyvariant_tags_constraint relation row tags;
   begin
     match relation with
@@ -701,19 +724,14 @@ let intersect_lists l1 l2 = List.filter (fun x -> List.mem x l1) l2
 let subset_lists l1 l2 = List.for_all (fun id -> List.mem id l2) l1
 let exclude_listsq l1 l2 = List.filter (fun id -> not @@ List.memq id l2) l1
 
-(* exception Romanv of string *)
+type row_kind_id = row_kind dsf ref
+type row_kind_class = row_kind dsf
 
-module RowDescHtbl = Hashtbl.Make(struct
-  type t = row_desc
-  let equal = (==)
-  let hash = Hashtbl.hash
-end)
-
-let sprint_htbl pref htbl kp pv =
-  Printf.fprintf dump "Htbl %s:\n" pref;
+let sprint_htbl pref htbl kp pv = ()
+  (* Printf.fprintf dump "Htbl %s:\n" pref;
   RowDescHtbl.iter (fun k v -> Printf.fprintf dump "%s: %s\n" (kp k) (pv v)) htbl;
   Printf.fprintf dump "\n";
-  flush stdout
+  flush stdout *)
 
 (** edges = ((edges_var_ub, edges_tag_ub), (edges_var_lb, edges_tag_lb)) *)
 
@@ -725,13 +743,19 @@ let collect_tag_edges constraints merge =
       | None -> RowDescHtbl.add edges_tag row tags
       | Some tags' -> RowDescHtbl.replace edges_tag row (merge tags tags'))
     constraints;
+  RowDescHtbl.filter_map_inplace
+    (fun _row tags -> Some (uniq tags))
+    edges_tag;
   edges_tag
 
+let merge_tags_ub = intersect_lists
+let merge_tags_lb = merge_lists_compare String.compare
+
 let collect_tag_ub_edges () =
-  collect_tag_edges !polyvariants_tag_ub_constraints intersect_lists
+  collect_tag_edges !polyvariants_tag_ub_constraints merge_tags_ub
 
 let collect_tag_lb_edges () =
-  collect_tag_edges !polyvariants_tag_lb_constraints (merge_lists_compare String.compare)
+  collect_tag_edges !polyvariants_tag_lb_constraints merge_tags_lb
 
 let collect_var_edges () =
   let constraints = !polyvariants_constraints in
@@ -754,84 +778,117 @@ let collect_edges () =
   let edges_tag_lb = collect_tag_lb_edges () in
   ((edges_var_ub, edges_tag_ub),(edges_var_lb, edges_tag_lb))
 
+let _iter_reachables f edges row =
+  let visited = RowDescHtbl.create 17 in
+  let rec calc_reachable row =
+    if RowDescHtbl.mem visited row then () else begin
+    RowDescHtbl.add visited row ();
+    f row;
+    match RowDescHtbl.find_opt edges row with
+    | None -> ()
+    | Some direct -> List.iter calc_reachable direct
+    end
+  in
+  calc_reachable row
+
+let find_reachables ((edges, _), (edges', _)) row =
+  let reachable = RowDescHtbl.create 17 in
+  let add row = RowDescHtbl.add reachable row () in
+  _iter_reachables add edges row;
+  _iter_reachables add edges' row;
+  reachable
+
 (* romanv: Maybe we can merge this components in single type for performance *)
 let find_components ((edges, _), _) =
   let reachable = RowDescHtbl.create 17 in
-  let rec calc_reachable used id =
-    if RowDescHtbl.mem used id then [] else begin
-    RowDescHtbl.add used id ();
-    match RowDescHtbl.find_opt reachable id with
-    | Some reacheble -> reacheble
-    | None ->
-        let direct = RowDescHtbl.find_opt edges id in
-        let direct = Option.value direct ~default:[] in
-        let indirect = List.map (calc_reachable used) direct in
-        uniq (List.append direct (List.concat indirect))
+  let rec calc_reachable visited id =
+    if RowDescHtbl.mem visited id then () else begin
+    RowDescHtbl.add visited id ();
+    match RowDescHtbl.find_opt edges id with
+    | None -> ()
+    | Some direct -> List.iter (calc_reachable visited) direct
     end
   in
   RowDescHtbl.iter
-    (fun id _ -> RowDescHtbl.add reachable id (calc_reachable (RowDescHtbl.create 17) id))
+    (fun id _ ->
+      let visited = RowDescHtbl.create 17 in
+      calc_reachable visited id;
+      let visited = RowDescHtbl.fold (fun id _ acc -> id :: acc) visited [] in
+      RowDescHtbl.add reachable id visited)
     edges;
+  sprint_htbl "Reachable" reachable sprint_row_id sprint_row_ids;
   let connected = RowDescHtbl.create 17 in
-  RowDescHtbl.iter
-    (fun id1 reachable1 ->
-      List.iter
-        (fun id2 ->
-          if not (id1 == id2) then
-            let reachable2 = RowDescHtbl.find_opt reachable id2 in
-            let reachable2 = Option.value reachable2 ~default:[] in
-            if List.memq id1 reachable2 then
-              match RowDescHtbl.find_opt connected id1 with
-              | None -> RowDescHtbl.add connected id1 [id2]
-              | Some prev -> (RowDescHtbl.replace connected id1 (id2 :: prev)))
-        reachable1)
-    edges;
-  connected
+  RowDescHtbl.iter (fun id1 reachable1 ->
+    List.iter (fun id2 ->
+      if not (id1 == id2) then
+        let reachable2 = RowDescHtbl.find_opt reachable id2 in
+        let reachable2 = Option.value reachable2 ~default:[] in
+        if List.memq id1 reachable2 then
+          match RowDescHtbl.find_opt connected id1 with
+          | None -> RowDescHtbl.add connected id1 (ref [id2])
+          | Some prev -> prev :=  id2 :: !prev)
+    reachable1)
+  reachable;
+  let connected' = RowDescHtbl.create 17 in
+  RowDescHtbl.iter (fun row ref_lst -> RowDescHtbl.add connected' row !ref_lst) connected;
+  connected'
 
-let transform_edges_vars edges connected =
-  let edges = RowDescHtbl.copy edges in
-  RowDescHtbl.iter
-    (fun id edg ->
-      if RowDescHtbl.mem connected id then begin
-        let conn = RowDescHtbl.find connected id in
-        let new_edg = exclude_listsq edg conn in
-        if new_edg = []
-          then RowDescHtbl.remove edges id
-          else RowDescHtbl.replace edges id new_edg
-      end)
-    edges;
+let transform_edges_ f edges connected =
+  let transformed = RowDescHtbl.create 17 in
   RowDescHtbl.iter
     (fun row con ->
-        let get_edges row =
-          Option.value (RowDescHtbl.find_opt edges row) ~default:[] in
-        let transitive_edges = List.concat @@ List.map get_edges con in
-        let new_edges = uniq (List.append transitive_edges (get_edges row)) in
-        if new_edges = []
-          then RowDescHtbl.remove edges row
-          else RowDescHtbl.replace edges row new_edges)
+        if not (RowDescHtbl.mem transformed row) then begin
+          assert (not (List.memq row con));
+          let group = row :: con in
+          (* let get_edges row =
+            Option.value (RowDescHtbl.find_opt edges row) ~default:[] in
+          let group_edges = f get_edges group in *)
+          let upd = f group edges in
+          List.iter upd group;
+          List.iter (fun row -> RowDescHtbl.add transformed row ()) group
+        end)
     connected;
   edges
 
-let transform_edges_tags edges connected =
-  let edges = RowDescHtbl.copy edges in
-  RowDescHtbl.iter
-    (fun row con ->
-        let get_edges row =
-          Option.value (RowDescHtbl.find_opt edges row) ~default:[] in
-        let transitive_edges = List.concat @@ List.map get_edges con in
-        let new_edges = uniq (List.append transitive_edges (get_edges row)) in
-        if new_edges = []
-          then RowDescHtbl.remove edges row
-          else RowDescHtbl.replace edges row new_edges)
-    connected;
-  edges
+let transform_edges_v =
+  transform_edges_
+    (fun group edges ->
+      let get_edges row = Option.value (RowDescHtbl.find_opt edges row) ~default:[] in
+      let new_edges = exclude_listsq (uniq (List.concat_map get_edges group)) group in
+      if new_edges = []
+      then fun row -> RowDescHtbl.remove edges row
+      else fun row -> RowDescHtbl.replace edges row new_edges)
+
+let transform_edges_t_ub =
+  transform_edges_
+    (fun group edges ->
+      let new_edges = List.filter_map (RowDescHtbl.find_opt edges) group in
+      match new_edges with
+        | [] ->
+            fun row -> RowDescHtbl.remove edges row
+        | h :: t ->
+            let new_edges = List.fold_left merge_tags_ub h t in
+            fun row -> RowDescHtbl.replace edges row new_edges)
+
+let transform_edges_t_lb =
+  transform_edges_
+    (fun group edges ->
+      let new_edges = List.filter_map (RowDescHtbl.find_opt edges) group in
+      match new_edges with
+        | [] ->
+            fun row -> RowDescHtbl.remove edges row
+        | h :: t ->
+            let new_edges = List.fold_left merge_tags_lb h t in
+            if new_edges = []
+              then fun row -> RowDescHtbl.remove edges row
+              else fun row -> RowDescHtbl.replace edges row new_edges)
 
 let transform_edges
-  ((edges_lb_vars, edges_lb_tags), (edges_ub_vars, edges_ub_tags)) connected =
-  (transform_edges_vars edges_lb_vars connected,
-   transform_edges_tags edges_lb_tags connected),
-  (transform_edges_vars edges_ub_vars connected,
-   transform_edges_tags edges_ub_tags connected)
+  ((edges_ub_vars, edges_ub_tags), (edges_lb_vars, edges_lb_tags)) connected =
+  (transform_edges_v edges_ub_vars connected,
+   transform_edges_t_ub edges_ub_tags connected),
+  (transform_edges_v edges_lb_vars connected,
+   transform_edges_t_lb edges_lb_tags connected)
 
 let transform_context context connected =
   let equal row = Option.value (RowDescHtbl.find_opt connected row) ~default:[] in
@@ -895,7 +952,7 @@ let solve_set_type_with_context_ context (edges_ub, edges_lb) (row : row_desc) =
   | Some ub_tags, Some lb_tags when not @@ subset_lists lb_tags ub_tags ->
       Printf.fprintf dump "FAIL: %s; %s\n" (sprint_tags ub_tags) (sprint_tags lb_tags);
       flush dump;
-      assert false
+      SSFail
   | _ ->
       let solution = SSTags (lb_tags, ub_tags) in
       let solution =
@@ -911,12 +968,60 @@ let solve_set_type_with_context_ context (edges_ub, edges_lb) (row : row_desc) =
       solution
   end
 
+exception RV
+
+let rec filter_edges ((e1,e2),(e3,e4)) reachable =
+  let filter htbl =
+    RowDescHtbl.filter_map_inplace
+      (fun row con ->
+        if RowDescHtbl.mem reachable row then Some con else None)
+      htbl in
+  filter e1;
+  filter e2;
+  filter e3;
+  filter e4
+
+let dump_edges pr ((e_v, e_t_u),(_, e_t_l)) = ()
+  (* Printf.fprintf dump "%s" pr;
+  sprint_htbl "edges vars" e_v sprint_row_id sprint_row_ids;
+  sprint_htbl "edges tags upper" e_t_u sprint_row_id sprint_tags;
+  sprint_htbl "edges tags lower" e_t_l sprint_row_id sprint_tags *)
+
 let solve_set_type_with_context context row =
+  if Sys.file_exists "/raise" then raise RV;
+  Printf.printf "Solving for %s\n" (sprint_row row);
+  Printf.printf "Constraints size: v-%d ut-%d lt-%d\n"
+    (List.length !polyvariants_constraints)
+    (List.length !polyvariants_tag_ub_constraints)
+    (List.length !polyvariants_tag_lb_constraints);
+  let t1 = Sys.time () in
   let edges = collect_edges () in
+  dump_edges "Before:" edges;
+  let t2 = Sys.time () in
+  let reachable = find_reachables edges row in
+  let t3 = Sys.time () in
+  filter_edges edges reachable;
+  dump_edges "Filtered:" edges;
+  let t4 = Sys.time () in
   let connected = find_components edges in
-  let context = transform_context context connected in
+  let t5 = Sys.time () in
   let edges = transform_edges edges connected in
-  solve_set_type_with_context_ context edges row
+  dump_edges "Transformed:" edges;
+  let t6 = Sys.time () in
+  Printf.printf "Reachable size: %d\n" (RowDescHtbl.length reachable);
+  Printf.printf "Collect time: %f\n" (t2 -. t1);
+  Printf.printf "Find reachables time: %f\n" (t3 -. t2);
+  Printf.printf "Filter edges time: %f\n" (t4 -. t3);
+  Printf.printf "Find components time: %f\n" (t5 -. t4);
+  Printf.printf "Transform edges time: %f\n" (t6 -. t5);
+  let t7 = Sys.time () in
+  let context = transform_context context connected in
+  let t8 = Sys.time () in
+  Printf.printf "Transform time: %f\n" (t8 -. t7);
+  let ans = solve_set_type_with_context_ context edges row in
+  Printf.printf "Solve time: %f\n" (Sys.time () -. t8);
+  flush stdout;
+  ans
 
 (* romanv: Could be solved much faster in case of empty context *)
 let solve_set_type row =
@@ -927,6 +1032,7 @@ let solve_set_type row =
       let ub' = Option.value (Option.map sprint_tags ub) ~default:"-" in
       Printf.fprintf dump "lb: %s\nub: %s\n\n" lb' ub';
       lb, ub
+  | SSFail -> raise RV
   | _ -> assert false
 
 (* exception RV *)
@@ -959,6 +1065,8 @@ let cp_rows (rows : (row_desc * row_desc) list) : unit =
     | SSTags (lb, ub) ->
         Option.iter (add_polyvariant_tags_constrint Left to_) lb;
         Option.iter (add_polyvariant_tags_constrint Right to_) ub
+    | SSVariable row ->
+        add_polyvariant_constraint ~from:"cp_rows" Equal to_ row
     | _ -> assert false
   in
   List.iter2 cp_constraints rows solutions
@@ -990,6 +1098,8 @@ let row_fields_lb row =
   | None, _ -> []
 
 let row_kind row = dsf_get row.row_kind
+let row_kind_id row = let (_, id) = dsf_last_link row.row_kind in id
+let row_kind_class row = row.row_kind
 let row_fixed row = row.row_fixed
 let row_name row = row.row_name
 let row_debug_info row = row.debug_info
@@ -1004,6 +1114,9 @@ let get_row_field tag row =
 
 let merge_row_kinds f row row' =
   dsf_merge f row.row_kind row'.row_kind
+
+let merge_row_kinds_classes f kind_class kind_class' =
+  dsf_merge f kind_class kind_class'
 
 let set_row_name row row_name =
   { row with row_name }
@@ -1067,6 +1180,7 @@ let sprint_desc = function
   | Tsubst _ -> "Tsubst"
 
 let dump_link ty ty' =
+  if Sys.file_exists "/dump_link" then
   Printf.fprintf dump "link_type: %s - %s\n" (sprint_desc ty.desc) (sprint_desc ty'.desc)
 
 let log_type ty =

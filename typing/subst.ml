@@ -222,7 +222,7 @@ let rec typexp copy_scope s ty =
           begin
               (* Return a new copy *)
               let row =
-                copy_row copy_scope (typexp copy_scope s) true row in
+                copy_row copy_scope (typexp copy_scope s) true false row in
               match row_name row with
               | Some (p, tl) ->
                   let name =

@@ -420,9 +420,12 @@ let rec copy_type_desc ?(keep_names=false) f = function
 module For_copy : sig
   type copy_scope
 
+  val get_copied_kind: copy_scope -> row_kind_id -> row_kind_class option
+
   val redirect_desc: copy_scope -> type_expr -> type_desc -> unit
 
   val register_row_copy: copy_scope -> row_desc -> row_desc -> unit
+  val register_copied_kind: copy_scope -> row_kind_id -> row_kind_class -> unit
 
   val with_scope: (copy_scope -> 'a) -> 'a
 end = struct
@@ -431,7 +434,13 @@ end = struct
     (* Save association of generic nodes with their description. *)
     mutable copied_rows : (row_desc * row_desc) list;
     (** Pairs of copied types of polymorphic variants. (from, to) *)
+    mutable copied_kinds : (row_kind_id * row_kind_class) list;
   }
+
+  let get_copied_kind copy_scope id = List.assq_opt id copy_scope.copied_kinds
+
+  let register_copied_kind copy_scope id kind =
+    copy_scope.copied_kinds <- (id, kind) :: copy_scope.copied_kinds
 
   let redirect_desc copy_scope ty desc =
     let ty = Transient_expr.repr ty in
@@ -448,20 +457,40 @@ end = struct
   let copy_row_constraints { copied_rows; _ } = cp_rows copied_rows
 
   let with_scope f =
-    let scope = { saved_desc = []; copied_rows = [] } in
+    let scope = { saved_desc = []; copied_rows = []; copied_kinds = [] } in
     let res = f scope in
     cleanup scope;
     copy_row_constraints scope;
     res
 end
 
-let copy_row scope f fixed row =
+exception RV
+
+let copy_row scope f fixed shared row =
   let Row {kind; fixed = orig_fixed; name} = row_repr row in
-  let kind = List.map (fun (l, oty) -> l, Option.map f oty) kind in
   let name = Option.map (fun (path, tl) -> path, List.map f tl) name in
   let fixed = if fixed then orig_fixed else None in
-  let new_row = create_row ~from:"copy_row" ~kind ~fixed ~name in
+  let kind_id = row_kind_id row in
+  let new_row =
+    match For_copy.get_copied_kind scope kind_id with
+    | None ->
+        let kind = List.map (fun (l, oty) -> l, Option.map f oty) kind in
+        let new_row = create_row ~from:"copy_row" ~kind ~fixed ~name in
+        For_copy.register_copied_kind scope kind_id (row_kind_class new_row);
+        new_row
+    | Some k ->
+        let new_row = create_row ~from:"copy_row" ~kind:[] ~fixed ~name in
+        merge_row_kinds_classes (fun k _ -> k) k (row_kind_class new_row);
+        new_row
+  in
   For_copy.register_row_copy scope row new_row;
+  (* if shared then add_polyvariant_constraint Equal row new_row; *)
+  (* begin
+    if Sys.file_exists "/flag" then
+      let (_, from_id) = row_debug_info row
+      and (_, to_id) = row_debug_info new_row in
+      if from_id == 7 && to_id == 10 then raise RV
+  end; *)
   new_row
 
                   (*******************************************)
