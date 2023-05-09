@@ -303,6 +303,7 @@ and print_simple_out_type ppf =
       in
       match fields with
       | Top -> fprintf ppf "T"
+      | Bot -> fprintf ppf "Bot"
       | Tags tags ->
           fprintf ppf "@[<hov>@[<hv>%a@]@]" print_fields tags
     end

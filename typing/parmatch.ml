@@ -739,6 +739,7 @@ let full_match closing env =  match env with
           env
       in
       let row = type_row () in
+      Printf.printf "%s\n" (sprint_row row);
       if closing then
         (* closing=true, we are considering the variant as closed *)
         List.for_all
@@ -1324,8 +1325,9 @@ and specialize_and_exhaust ext pss n =
             Seq.map (set_args p) sub_witnesses
         in
         let try_omega () =
-          (* Printf.printf "specialize_and_exhaust\n"; *)
-          if full_match false constrs && not (_should_extend ext constrs) then
+          let tmp = full_match false constrs in
+          Printf.printf "specialize_and_exhaust: try_omega %b\n" tmp;
+          if tmp && not (_should_extend ext constrs) then
             Seq.empty
           else
             let sub_witnesses = exhaust ext default (n-1) in

@@ -2455,8 +2455,6 @@ let link_type_rel from ty ty' =
   | _ -> link_type ty ty'
   end
 
-exception RV
-
 (* force unification in Reither when one side has a non-conjunctive type *)
 let rigid_variants = ref false
 
@@ -2876,7 +2874,6 @@ and unify_row_kind env row1 row2 =
     row1 row2
 
 and unify_row env row1 row2 =
-  if Sys.file_exists "/unify_raise" && relation_coerce () = Types.Unknown then raise RV;
   unify_row_kind env row1 row2;
   add_polyvariant_constraint ~from:"unify_row" (relation_coerce ()) row1 row2;
   let ans1 = solve_set_type_with_context [] row1 in

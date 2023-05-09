@@ -1064,7 +1064,7 @@ let rec transform_solution get_field context solution =
       Option.map (List.map (fun l -> l, get_field l)) ub)
   | SSUnion (l, r) -> PSUnion (re l, re r)
   | SSIntersection (l, r) -> PSIntersection (re l, re r)
-  | SSFail -> assert false
+  | SSFail -> PSTags (None, Some [])
 
 let rec iter_variables f solution =
   match solution with
@@ -1200,14 +1200,14 @@ let rec tree_of_typexp_ ((solutions, used_variables) as c) mode ty =
 
 and tree_of_set_solution ((_, used_variables) as c) mode solution =
   match solution with
-  | PSTags (lb, ub) ->
+  | PSTags (None, None) -> Otyp_variant Top
+  | PSTags (lb, ub) -> begin
       let fields =
         match lb, ub with
-        | _, Some ub -> ub
-        | Some lb, None -> lb
-        | None, None -> []
+        | _, Some fields
+        | Some fields, None -> fields
+        | None, None -> assert false
       in
-      if fields = [] then Otyp_variant Top else
       let fields =
         List.map
           (fun (l, ty) ->
@@ -1219,7 +1219,8 @@ and tree_of_set_solution ((_, used_variables) as c) mode solution =
           (fun (l, _) (l', _) -> String.compare l l')
           fields
       in
-      Otyp_variant (Tags fields)
+      Otyp_variant (if fields = [] then Bot else Tags fields)
+    end
   | PSVariable id -> begin
       assert (Hashtbl.mem used_variables id);
       match Hashtbl.find used_variables id with

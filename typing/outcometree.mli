@@ -86,6 +86,7 @@ and out_constructor = {
 
 and out_variant =
   | Top
+  | Bot
   | Tags of (string * out_type option) list
 
 type out_class_type =

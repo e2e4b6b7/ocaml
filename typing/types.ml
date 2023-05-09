@@ -727,11 +727,11 @@ let exclude_listsq l1 l2 = List.filter (fun id -> not @@ List.memq id l2) l1
 type row_kind_id = row_kind dsf ref
 type row_kind_class = row_kind dsf
 
-let sprint_htbl pref htbl kp pv = ()
-  (* Printf.fprintf dump "Htbl %s:\n" pref;
+let sprint_htbl pref htbl kp pv =
+  Printf.fprintf dump "Htbl %s:\n" pref;
   RowDescHtbl.iter (fun k v -> Printf.fprintf dump "%s: %s\n" (kp k) (pv v)) htbl;
   Printf.fprintf dump "\n";
-  flush stdout *)
+  flush stdout
 
 (** edges = ((edges_var_ub, edges_tag_ub), (edges_var_lb, edges_tag_lb)) *)
 
@@ -816,7 +816,6 @@ let find_components ((edges, _), _) =
       let visited = RowDescHtbl.fold (fun id _ acc -> id :: acc) visited [] in
       RowDescHtbl.add reachable id visited)
     edges;
-  sprint_htbl "Reachable" reachable sprint_row_id sprint_row_ids;
   let connected = RowDescHtbl.create 17 in
   RowDescHtbl.iter (fun id1 reachable1 ->
     List.iter (fun id2 ->
@@ -981,46 +980,14 @@ let rec filter_edges ((e1,e2),(e3,e4)) reachable =
   filter e3;
   filter e4
 
-let dump_edges pr ((e_v, e_t_u),(_, e_t_l)) = ()
-  (* Printf.fprintf dump "%s" pr;
-  sprint_htbl "edges vars" e_v sprint_row_id sprint_row_ids;
-  sprint_htbl "edges tags upper" e_t_u sprint_row_id sprint_tags;
-  sprint_htbl "edges tags lower" e_t_l sprint_row_id sprint_tags *)
-
 let solve_set_type_with_context context row =
-  if Sys.file_exists "/raise" then raise RV;
-  Printf.printf "Solving for %s\n" (sprint_row row);
-  Printf.printf "Constraints size: v-%d ut-%d lt-%d\n"
-    (List.length !polyvariants_constraints)
-    (List.length !polyvariants_tag_ub_constraints)
-    (List.length !polyvariants_tag_lb_constraints);
-  let t1 = Sys.time () in
   let edges = collect_edges () in
-  dump_edges "Before:" edges;
-  let t2 = Sys.time () in
   let reachable = find_reachables edges row in
-  let t3 = Sys.time () in
   filter_edges edges reachable;
-  dump_edges "Filtered:" edges;
-  let t4 = Sys.time () in
   let connected = find_components edges in
-  let t5 = Sys.time () in
   let edges = transform_edges edges connected in
-  dump_edges "Transformed:" edges;
-  let t6 = Sys.time () in
-  Printf.printf "Reachable size: %d\n" (RowDescHtbl.length reachable);
-  Printf.printf "Collect time: %f\n" (t2 -. t1);
-  Printf.printf "Find reachables time: %f\n" (t3 -. t2);
-  Printf.printf "Filter edges time: %f\n" (t4 -. t3);
-  Printf.printf "Find components time: %f\n" (t5 -. t4);
-  Printf.printf "Transform edges time: %f\n" (t6 -. t5);
-  let t7 = Sys.time () in
   let context = transform_context context connected in
-  let t8 = Sys.time () in
-  Printf.printf "Transform time: %f\n" (t8 -. t7);
   let ans = solve_set_type_with_context_ context edges row in
-  Printf.printf "Solve time: %f\n" (Sys.time () -. t8);
-  flush stdout;
   ans
 
 (* romanv: Could be solved much faster in case of empty context *)
@@ -1031,18 +998,15 @@ let solve_set_type row =
       let lb' = Option.value (Option.map sprint_tags lb) ~default:"-" in
       let ub' = Option.value (Option.map sprint_tags ub) ~default:"-" in
       Printf.fprintf dump "lb: %s\nub: %s\n\n" lb' ub';
-      lb, ub
-  | SSFail -> raise RV
+      Some (lb, ub)
+  | SSFail -> None
   | _ -> assert false
-
-(* exception RV *)
 
 let cp_rows (rows : (row_desc * row_desc) list) : unit =
   List.iter
     (fun (from_row, to_row) ->
       let (_, from_id) = from_row.debug_info in
       let (_, to_id) = to_row.debug_info in
-      (* if from_id == 8 && to_id == 14 then raise RV; *)
       Printf.fprintf dump "COPY: %d -> %d\n" from_id to_id)
     rows;
   let context = List.map fst rows in
@@ -1082,7 +1046,7 @@ let create_row ~from ~kind ~fixed ~name : row_desc =
 (* [row_fields] subsumes the original [row_repr] *)
 let row_fields_ub row =
   match solve_set_type row with
-  | _, Some tags -> Some (List.map (
+  | Some (_, Some tags) -> Some (List.map (
       fun tag -> tag,
         let oty = List.assoc_opt tag (dsf_get row.row_kind) in
         match oty with
@@ -1090,12 +1054,13 @@ let row_fields_ub row =
         | None ->
           Printf.fprintf dump "tag %s not found in row %s\n" tag (sprint_row row); flush dump; assert false
       ) tags)
-  | _, None -> None
+  | Some (_, None) -> None
+  | None -> Some []
 
 let row_fields_lb row =
   match solve_set_type row with
-  | Some tags, _ -> List.map (fun tag -> tag, List.assoc tag (dsf_get row.row_kind)) tags
-  | None, _ -> []
+  | Some (Some tags, _) -> List.map (fun tag -> tag, List.assoc tag (dsf_get row.row_kind)) tags
+  | Some (None, _) | None -> []
 
 let row_kind row = dsf_get row.row_kind
 let row_kind_id row = let (_, id) = dsf_last_link row.row_kind in id
@@ -1106,8 +1071,9 @@ let row_debug_info row = row.debug_info
 
 let row_closed row =
   match solve_set_type row with
-  | _, Some _ -> true
-  | _, None -> false
+  | Some (_, Some _) -> true
+  | Some (_, None) -> false
+  | None -> true
 
 let get_row_field tag row =
   List.assoc_opt tag (dsf_get row.row_kind)

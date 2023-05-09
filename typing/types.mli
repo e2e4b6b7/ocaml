@@ -330,7 +330,7 @@ val get_imediate_subtypes: row_desc -> row_desc list
 val get_imediate_uptypes: row_desc -> row_desc list
 
 val solve_set_type_with_context: row_desc list -> row_desc -> set_solution
-val solve_set_type: row_desc -> label list option * label list option
+(* val solve_set_type: row_desc -> (label list option * label list option) option *)
 
 val create_row:
   from: string ->

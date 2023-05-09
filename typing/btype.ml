@@ -464,9 +464,7 @@ end = struct
     res
 end
 
-exception RV
-
-let copy_row scope f fixed shared row =
+let copy_row scope f fixed _shared row =
   let Row {kind; fixed = orig_fixed; name} = row_repr row in
   let name = Option.map (fun (path, tl) -> path, List.map f tl) name in
   let fixed = if fixed then orig_fixed else None in
@@ -485,12 +483,6 @@ let copy_row scope f fixed shared row =
   in
   For_copy.register_row_copy scope row new_row;
   (* if shared then add_polyvariant_constraint Equal row new_row; *)
-  (* begin
-    if Sys.file_exists "/flag" then
-      let (_, from_id) = row_debug_info row
-      and (_, to_id) = row_debug_info new_row in
-      if from_id == 7 && to_id == 10 then raise RV
-  end; *)
   new_row
 
                   (*******************************************)

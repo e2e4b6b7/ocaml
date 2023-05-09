@@ -764,7 +764,7 @@ let solve_Ppat_variant ~refine loc env tag no_arg expected_ty =
      the abstract row variable *)
   if tag <> Parmatch.some_private_tag then
     unify_pat_types ~refine loc env (newgenty(Tvariant row)) expected_ty;
-  (arg_type, make_row (), instance expected_ty)
+  (arg_type, make_row (), expected_ty)
 
 (* Building the or-pattern corresponding to a polymorphic variant type *)
 let build_or_pat env loc lid =
