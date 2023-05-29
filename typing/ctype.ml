@@ -2939,8 +2939,8 @@ let unify_pairs env ty1 ty2 pairs =
 let unify ?(relation = Unknown) env ty1 ty2 =
   set_unify_relation relation (fun _ -> unify_pairs (ref env) ty1 ty2 [])
 
-let unify_gadt ?(relation = Unknown) ~equations_level:lev ~allow_recursive (env:Env.t ref) ty1 ty2 =
-  set_unify_relation relation (fun _ -> unify_gadt ~equations_level:lev ~allow_recursive env ty1 ty2)
+let unify_gadt ?(relation = Unknown) ~equations_level ~allow_recursive (env:Env.t ref) ty1 ty2 =
+  set_unify_relation relation (fun _ -> unify_gadt ~equations_level ~allow_recursive env ty1 ty2)
 
 
 (**** Special cases of unification ****)

@@ -636,20 +636,6 @@ module RowDescHtbl = Hashtbl.Make(struct
   let hash = Hashtbl.hash
 end)
 
-
-let solution_cache = ref None
-
-let drop_cache () =
-  solution_cache := None
-
-let get_solution_cache f =
-  match !solution_cache with
-  | Some cached -> cached
-  | None ->
-      let ans = f () in
-      solution_cache := Some ans;
-      ans
-
 let _add_constraint relation v1 v2 constraints =
   let add ((l, r) as c) cs =
     if List.exists (fun (l', r') -> l' == l && r' == r) cs
@@ -667,7 +653,6 @@ let log_new_polyvariant_constraint from relation row1 row2 =
   flush dump
 
 let add_polyvariant_constraint ?(from="Unknown source") relation row1 row2 =
-  drop_cache ();
   log_new_polyvariant_constraint from relation row1 row2;
   _add_constraint relation row1 row2 polyvariants_constraints
 
@@ -677,7 +662,6 @@ let log_new_polyvariant_tags_constraint relation row1 tags =
   flush dump
 
 let add_polyvariant_tags_constrint relation row tags =
-  drop_cache ();
   log_new_polyvariant_tags_constraint relation row tags;
   begin
     match relation with
@@ -966,8 +950,6 @@ let solve_set_type_with_context_ context (edges_ub, edges_lb) (row : row_desc) =
           ub_variables in
       solution
   end
-
-exception RV
 
 let rec filter_edges ((e1,e2),(e3,e4)) reachable =
   let filter htbl =
