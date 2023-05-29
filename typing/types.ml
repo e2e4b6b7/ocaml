@@ -54,6 +54,7 @@ and row_desc =
     { row_kind: row_kind dsf;
       row_fixed: fixed_explanation option;
       row_name: (Path.t * type_expr list) option;
+      row_var: type_expr;
       debug_info: (string (* from *) * int (* debug id *)) }
 and fixed_explanation =
   | Univar of type_expr | Fixed_private | Reified of Path.t | Rigid
@@ -501,6 +502,13 @@ let rec is_commu_ok : type a. a commutable_gen -> bool = function
 let commu_ok = Cok
 let commu_var () = Cvar {commu=Cunknown}
 
+(*** Global subtyping constraints ***)
+
+let polyvariants_tag_ub_constraints : (row_desc * label list) list ref = ref []
+let polyvariants_tag_lb_constraints : (row_desc * label list) list ref = ref []
+let polyvariants_constraints : (row_desc * row_desc) list ref = ref []
+let variables_constraints : (type_expr * type_expr) list ref = ref []
+
 (**** Representative of a type ****)
 
 let rec repr_link (t : type_expr) d : type_expr -> type_expr =
@@ -538,13 +546,21 @@ let get_level t = (repr t).level
 let get_scope t = (repr t).scope
 let get_id t = (repr t).id
 
+let rec set_level ty lv = 
+  ty.level <- lv;
+  List.iter 
+    (fun (l, r) -> 
+      if l == ty && get_level r != lv then set_level r lv;
+      if r == ty && get_level l != lv then set_level l lv)
+    !variables_constraints
+
 (* transient type_expr *)
 
 module Transient_expr = struct
   let create desc ~level ~scope ~id = {desc; level; scope; id}
   let set_desc ty d = ty.desc <- d
   let set_stub_desc ty d = assert (ty.desc = Tvar None); ty.desc <- d
-  let set_level ty lv = ty.level <- lv
+  let set_level = set_level
   let set_scope ty sc = ty.scope <- sc
   let coerce ty = ty
   let repr = repr
@@ -598,12 +614,6 @@ type set_bound_solution = {
   variables: row_desc list;
 }
 
-let polyvariants_tag_ub_constraints : (row_desc * label list) list ref = ref []
-let polyvariants_tag_lb_constraints : (row_desc * label list) list ref = ref []
-let polyvariants_constraints : (row_desc * row_desc) list ref = ref []
-
-let variables_constraints : (type_expr * type_expr) list ref = ref []
-
 let dump =
   let dump = open_out_gen [Open_append; Open_creat] 0o666 "dump.txt" in
   Printf.fprintf dump "\n-- New env --\n\n";
@@ -616,8 +626,8 @@ let sprint_constraint_relation v = match v with
   | Unknown -> "Unknown"
 
 let sprint_tags tags = String.concat "" ["[";String.concat "," tags;"]"]
-let sprint_row_id {debug_info=(_, id)} = Printf.sprintf "%d" id
-let sprint_row_ids rows = String.concat "," @@ List.map sprint_row_id rows
+(* let sprint_row_id {debug_info=(_, id)} = Printf.sprintf "%d" id *)
+(* let sprint_row_ids rows = String.concat "," @@ List.map sprint_row_id rows *)
 
 let sprint_row row =
   let (from, id) = row.debug_info in
@@ -654,7 +664,8 @@ let log_new_polyvariant_constraint from relation row1 row2 =
 
 let add_polyvariant_constraint ?(from="Unknown source") relation row1 row2 =
   log_new_polyvariant_constraint from relation row1 row2;
-  _add_constraint relation row1 row2 polyvariants_constraints
+  _add_constraint relation row1 row2 polyvariants_constraints;
+  _add_constraint relation row1.row_var row2.row_var variables_constraints
 
 let log_new_polyvariant_tags_constraint relation row1 tags =
   Printf.fprintf dump "Variance: %s\n" (sprint_constraint_relation relation);
@@ -711,11 +722,11 @@ let exclude_listsq l1 l2 = List.filter (fun id -> not @@ List.memq id l2) l1
 type row_kind_id = row_kind dsf ref
 type row_kind_class = row_kind dsf
 
-let sprint_htbl pref htbl kp pv =
+(* let sprint_htbl pref htbl kp pv =
   Printf.fprintf dump "Htbl %s:\n" pref;
   RowDescHtbl.iter (fun k v -> Printf.fprintf dump "%s: %s\n" (kp k) (pv v)) htbl;
   Printf.fprintf dump "\n";
-  flush stdout
+  flush stdout *)
 
 (** edges = ((edges_var_ub, edges_tag_ub), (edges_var_lb, edges_tag_lb)) *)
 
@@ -951,7 +962,7 @@ let solve_set_type_with_context_ context (edges_ub, edges_lb) (row : row_desc) =
       solution
   end
 
-let rec filter_edges ((e1,e2),(e3,e4)) reachable =
+let filter_edges ((e1,e2),(e3,e4)) reachable =
   let filter htbl =
     RowDescHtbl.filter_map_inplace
       (fun row con ->
@@ -1020,10 +1031,10 @@ let cp_rows (rows : (row_desc * row_desc) list) : unit =
 let cur_id = ref 0
 let new_id () = cur_id := !cur_id + 1; !cur_id
 
-let create_row ~from ~kind ~fixed ~name : row_desc =
+let create_row ~from ~var ~kind ~fixed ~name : row_desc =
   let debug_info = (from, new_id ()) in
   { row_kind=dsf_init kind; row_fixed=fixed;
-    row_name=name; debug_info }
+    row_name=name; row_var=var; debug_info }
 
 (* [row_fields] subsumes the original [row_repr] *)
 let row_fields_ub row =
@@ -1050,6 +1061,7 @@ let row_kind_class row = row.row_kind
 let row_fixed row = row.row_fixed
 let row_name row = row.row_name
 let row_debug_info row = row.debug_info
+let row_var row = row.row_var
 
 let row_closed row =
   match solve_set_type row with

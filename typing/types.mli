@@ -334,6 +334,7 @@ val solve_set_type_with_context: row_desc list -> row_desc -> set_solution
 
 val create_row:
   from: string ->
+  var: type_expr ->
   kind: row_kind ->
   fixed: fixed_explanation option ->
   name: (Path.t * type_expr list) option -> row_desc
@@ -347,6 +348,7 @@ val row_fixed: row_desc -> fixed_explanation option
 val row_name: row_desc -> (Path.t * type_expr list) option
 val row_closed: row_desc -> bool
 val row_debug_info: row_desc -> string * int
+val row_var: row_desc -> type_expr
 
 val set_row_name: row_desc -> (Path.t * type_expr list) option -> row_desc
 val merge_row_kinds:

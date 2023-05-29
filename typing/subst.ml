@@ -221,8 +221,10 @@ let rec typexp copy_scope s ty =
           (* Tsubst takes a tuple containing the row var and the variant *)
           begin
               (* Return a new copy *)
+              let var = row_var row in
+              let var' = if get_level var = generic_level then newgenty (get_desc var) else var in
               let row =
-                copy_row copy_scope (typexp copy_scope s) true false row in
+                copy_row copy_scope (typexp copy_scope s) true var' row in
               match row_name row with
               | Some (p, tl) ->
                   let name =

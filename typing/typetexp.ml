@@ -325,8 +325,10 @@ and transl_type_aux env policy styp =
           let row' =
             create_row
               ~from:"transl_type_aux"
+              ~var:(newvar ())
               ~kind:[]
-              ~fixed:None ~name:(Some (path, ty_args)) in
+              ~fixed:None 
+              ~name:(Some (path, ty_args)) in
           add_polyvariant_constraint Right row' row; (* romanv: maybe Equal*)
           newty (Tvariant row')
       | Tobject (fi, _) ->
@@ -380,6 +382,7 @@ and transl_type_aux env policy styp =
       let mkfield l oty =
         let row = create_row
           ~from:"transl_type_aux"
+          ~var:(newvar ())
           ~kind:[l,oty]
           ~fixed:None
           ~name:None in
@@ -454,6 +457,7 @@ and transl_type_aux env policy styp =
       let name = !name in
       let row = create_row
         ~from:"transl_type_aux"
+        ~var:(newvar ())
         ~kind:fields
         ~fixed:None
         ~name in

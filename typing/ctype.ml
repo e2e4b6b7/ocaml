@@ -1041,7 +1041,9 @@ let rec copy ?partial ?keep_names scope ty =
                             | abbrev  -> abbrev))
           end
       | Tvariant row ->
-          Tvariant (copy_row scope copy true true row)
+          let var = row_var row in
+          let var' = if get_level var = generic_level then var else newty (get_desc var) in
+          Tvariant (copy_row scope copy true var' row)
       | Tobject (ty1, _) when partial <> None ->
           Tobject (copy ty1, ref None)
       | _ -> copy_type_desc ?keep_names copy desc
@@ -1263,7 +1265,8 @@ let rec copy_sep ~cleanup_scope ~fixed ~free ~bound ~may_share
       | Tvariant row ->
           (* We shall really check the level on the row variable *)
           let row =
-            copy_row cleanup_scope (copy_rec ~may_share:true) fixed false(*romanv: not sure*) row in
+            let var = copy_rec ~may_share:false (row_var row) in
+            copy_row cleanup_scope (copy_rec ~may_share:true) fixed var row in
           Tvariant row
       | Tpoly (t1, tl) ->
           let tl' = List.map (fun t -> newty (get_desc t)) tl in
@@ -2448,7 +2451,7 @@ let link_type_rel from ty ty' =
   | Tvariant row, Tvariant row' ->
       add_polyvariant_constraint ~from (relation_coerce ()) row row'
   | Tvar _, Tvariant row' ->
-      let row = create_row ~from ~kind:[] ~fixed:None ~name:None in
+      let row = create_row ~from ~var:(newvar2 (get_level (row_var row'))) ~kind:[] ~fixed:None ~name:None in
       merge_row_kinds (fun _ k -> k) row row';
       add_polyvariant_constraint ~from (relation_coerce ()) row row';
       Transient_expr.set_desc tty (Tvariant row)

@@ -250,7 +250,7 @@ let fold_type_expr f init ty =
       List.fold_left f result p
   | Tobject (ty, _)     -> f init ty
   | Tvariant row        ->
-      fold_row f init row
+      f (fold_row f init row) (row_var row)
   | Tfield (_, _, ty1, ty2) ->
       let result = f init ty1 in
       f result ty2
@@ -464,7 +464,7 @@ end = struct
     res
 end
 
-let copy_row scope f fixed _shared row =
+let copy_row scope f fixed var row =
   let Row {kind; fixed = orig_fixed; name} = row_repr row in
   let name = Option.map (fun (path, tl) -> path, List.map f tl) name in
   let fixed = if fixed then orig_fixed else None in
@@ -473,16 +473,16 @@ let copy_row scope f fixed _shared row =
     match For_copy.get_copied_kind scope kind_id with
     | None ->
         let kind = List.map (fun (l, oty) -> l, Option.map f oty) kind in
-        let new_row = create_row ~from:"copy_row" ~kind ~fixed ~name in
+        let new_row = create_row ~from:"copy_row" ~var ~kind ~fixed ~name in
         For_copy.register_copied_kind scope kind_id (row_kind_class new_row);
         new_row
     | Some k ->
-        let new_row = create_row ~from:"copy_row" ~kind:[] ~fixed ~name in
+        let new_row = create_row ~from:"copy_row" ~var ~kind:[] ~fixed ~name in
         merge_row_kinds_classes (fun k _ -> k) k (row_kind_class new_row);
         new_row
   in
   For_copy.register_row_copy scope row new_row;
-  (* if shared then add_polyvariant_constraint Equal row new_row; *)
+  if var == row_var row then add_polyvariant_constraint Equal row new_row; (* romanv: to implement partially shared kind *)
   new_row
 
                   (*******************************************)

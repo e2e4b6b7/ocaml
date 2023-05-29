@@ -542,7 +542,7 @@ and build_as_type_aux ~refine (env : Env.t ref) p =
   | Tpat_variant(l, p', _) ->
       let ty = Option.map (build_as_type env) p' in
       let kind = [l, ty] in
-      let row = create_row ~from:"build_as_type_aux" ~kind ~name:None ~fixed:None in
+      let row = create_row ~from:"build_as_type_aux" ~var:(newvar ()) ~kind ~name:None ~fixed:None in
       newty (Tvariant row)
   | Tpat_record (lpl,_) ->
       let lbl = snd3 (List.hd lpl) in
@@ -755,16 +755,16 @@ let solve_Ppat_constraint ~refine loc env sty expected_ty =
 let solve_Ppat_variant ~refine loc env tag no_arg expected_ty =
   let arg_type = if no_arg then None else Some (newgenvar()) in
   let kind = [tag, arg_type] in
-  let make_row () =
-    create_row ~from:"solve_Ppat_variant" ~kind ~fixed:None ~name:None
+  let make_row var =
+    create_row ~from:"solve_Ppat_variant" ~var ~kind ~fixed:None ~name:None
   in
-  let row = make_row () in
+  let row = make_row (newgenvar ()) in
   (* let expected_ty = generic_instance expected_ty in *)
   (* PR#7404: allow some_private_tag blindly, as it would not unify with
      the abstract row variable *)
   if tag <> Parmatch.some_private_tag then
     unify_pat_types ~refine loc env (newgenty(Tvariant row)) expected_ty;
-  (arg_type, make_row (), expected_ty)
+  (arg_type, make_row (newvar ()), expected_ty)
 
 (* Building the or-pattern corresponding to a polymorphic variant type *)
 let build_or_pat env loc lid =
@@ -789,11 +789,11 @@ let build_or_pat env loc lid =
             :: pats)
       [] kind in
   let name = Some (path, tyl) in
-  let make_row () =
-    create_row ~from:"build_or_pat" ~kind ~fixed:None ~name in
-  let ty = newty (Tvariant (make_row ())) in
+  let make_row var =
+    create_row ~from:"build_or_pat" ~var ~kind ~fixed:None ~name in
+  let ty = newty (Tvariant (make_row (newvar ()))) in
   let gloc = {loc with Location.loc_ghost=true} in
-  let row' = ref (make_row ()) in
+  let row' = ref (make_row (newvar ())) in
   let pats =
     List.map
       (fun (l,p) ->
@@ -3064,6 +3064,7 @@ and type_expect_
         let row =
           create_row
             ~from: "type_expect_"
+            ~var: (newvar ())
             ~kind: [l, arg_type]
             ~fixed:  None
             ~name:   None

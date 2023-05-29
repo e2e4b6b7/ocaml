@@ -2164,6 +2164,7 @@ let hide_variant_name t =
       if name = None then t else
       let new_row = create_row
           ~from:"hide_variant_name"
+          ~var:(newvar2 (get_level (row_var row)))
           ~kind
           ~fixed
           ~name:None in
