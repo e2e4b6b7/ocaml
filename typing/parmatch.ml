@@ -1326,7 +1326,7 @@ and specialize_and_exhaust ext pss n =
         in
         let try_omega () =
           let tmp = full_match false constrs in
-          Printf.printf "specialize_and_exhaust: try_omega %b\n" tmp;
+          (* Printf.printf "specialize_and_exhaust: try_omega %b\n" tmp; *)
           if tmp && not (_should_extend ext constrs) then
             Seq.empty
           else
