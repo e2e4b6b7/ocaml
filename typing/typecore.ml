@@ -759,7 +759,7 @@ let solve_Ppat_variant ~refine loc env tag no_arg expected_ty =
     create_row ~from:"solve_Ppat_variant" ~var ~kind ~fixed:None ~name:None
   in
   let row = make_row (newgenvar ()) in
-  (* let expected_ty = generic_instance expected_ty in *)
+  let expected_ty = generic_instance expected_ty in
   (* PR#7404: allow some_private_tag blindly, as it would not unify with
      the abstract row variable *)
   if tag <> Parmatch.some_private_tag then

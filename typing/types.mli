@@ -308,7 +308,9 @@ type set_solution =
   | SSTags of
       string list option * (* lb *)
       string list option   (* ub *)
-  | SSFail
+  | SSFail of
+      string list option * (* lb *)
+      string list option   (* ub *)
 
 type constraint_relation = Left | Right | Equal | Unknown
 type row_kind = (label * type_expr option) list

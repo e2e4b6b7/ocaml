@@ -2881,8 +2881,10 @@ and unify_row env row1 row2 =
   add_polyvariant_constraint ~from:"unify_row" (relation_coerce ()) row1 row2;
   let ans1 = solve_set_type_with_context [] row1 in
   let ans2 = solve_set_type_with_context [] row2 in
-  if ans1 = SSFail || ans2 = SSFail then
+  match ans1, ans2 with
+  | SSFail _ , SSFail _ -> 
     raise_for Unify (Variant No_intersection)
+  | _ -> ()
 
 let unify env ty1 ty2 =
   let snap = Btype.snapshot () in

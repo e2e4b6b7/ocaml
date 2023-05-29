@@ -607,7 +607,9 @@ type set_solution =
   | SSTags of
       string list option * (* lb *)
       string list option   (* ub *)
-  | SSFail
+  | SSFail of
+      string list option * (* lb *)
+      string list option   (* ub *)
 
 type set_bound_solution = {
   tags: string list option;
@@ -944,9 +946,9 @@ let solve_set_type_with_context_ context (edges_ub, edges_lb) (row : row_desc) =
 
   match ub_tags, lb_tags with
   | Some ub_tags, Some lb_tags when not @@ subset_lists lb_tags ub_tags ->
-      Printf.fprintf dump "FAIL: %s; %s\n" (sprint_tags ub_tags) (sprint_tags lb_tags);
+      Printf.fprintf dump "FAIL on %s: %s; %s\n" (sprint_row row) (sprint_tags ub_tags) (sprint_tags lb_tags);
       flush dump;
-      SSFail
+      SSFail (Some lb_tags, Some ub_tags)
   | _ ->
       let solution = SSTags (lb_tags, ub_tags) in
       let solution =
@@ -992,7 +994,7 @@ let solve_set_type row =
       let ub' = Option.value (Option.map sprint_tags ub) ~default:"-" in
       Printf.fprintf dump "lb: %s\nub: %s\n\n" lb' ub';
       Some (lb, ub)
-  | SSFail -> None
+  | SSFail _ -> None
   | _ -> assert false
 
 let cp_rows (rows : (row_desc * row_desc) list) : unit =
@@ -1010,7 +1012,9 @@ let cp_rows (rows : (row_desc * row_desc) list) : unit =
   let rec cp_constraints (from, to_) solution =
     let re = cp_constraints (from, to_) in
     match solution with
-    | SSFail -> assert false
+    | SSFail (lb, ub) ->
+        Option.iter (add_polyvariant_tags_constrint Left to_) lb;
+        Option.iter (add_polyvariant_tags_constrint Right to_) ub
     | SSIntersection (solution, SSVariable row) ->
         let row = List.assq row rows in
         add_polyvariant_constraint ~from:"cp_rows" Right to_ row;

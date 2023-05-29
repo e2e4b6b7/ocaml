@@ -1064,7 +1064,7 @@ let rec transform_solution get_field context solution =
       Option.map (List.map (fun l -> l, get_field l)) ub)
   | SSUnion (l, r) -> PSUnion (re l, re r)
   | SSIntersection (l, r) -> PSIntersection (re l, re r)
-  | SSFail -> PSTags (None, Some [])
+  | SSFail _ -> PSTags (None, Some [])
 
 let rec iter_variables f solution =
   match solution with
