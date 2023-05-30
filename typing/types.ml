@@ -1049,7 +1049,10 @@ let row_fields_ub row =
         match oty with
         | Some ty -> ty
         | None ->
-          Printf.fprintf dump "tag %s not found in row %s\n" tag (sprint_row row); flush dump; assert false
+          Printf.fprintf dump 
+            "tag %s not found in row %s\n" tag (sprint_row row); 
+          flush dump; 
+          assert false
       ) tags)
   | Some (_, None) -> None
   | None -> Some []
