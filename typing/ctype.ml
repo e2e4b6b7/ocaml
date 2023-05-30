@@ -1042,7 +1042,7 @@ let rec copy ?partial ?keep_names scope ty =
           end
       | Tvariant row ->
           let var = row_var row in
-          let var' = if get_level var = generic_level then var else newty (get_desc var) in
+          let var' = if get_level var <> generic_level then var else newty (get_desc var) in
           Tvariant (copy_row scope copy true var' row)
       | Tobject (ty1, _) when partial <> None ->
           Tobject (copy ty1, ref None)
