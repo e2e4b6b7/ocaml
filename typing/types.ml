@@ -48,7 +48,11 @@ and 'a dsf =
   | DsfLink of 'a dsf ref
   | DsfValue of 'a
 
-and row_kind = (label * type_expr option) list
+and 'a tail_list =
+  | TLCons of 'a list * 'a tail_list ref
+  | TLNil
+
+and row_kind = (label * type_expr option) tail_list
 
 and row_desc =
     { row_kind: row_kind dsf;
@@ -572,7 +576,7 @@ end
 let eq_type t1 t2 = t1 == t2 || repr t1 == repr t2
 let compare_type t1 t2 = compare (get_id t1) (get_id t2)
 
-(* Constructor and accessors for [row_desc] *)
+(* dsf interface *)
 
 let dsf_init v = DsfLink (ref (DsfValue v))
 
@@ -599,6 +603,40 @@ let dsf_merge f dsf dsf' =
   v_ref := DsfLink dsf_v;
   v_ref' := DsfLink dsf_v;
   assert (dsf_get dsf == dsf_get dsf')
+
+(* tail list interface *)
+
+let tl_init l = TLCons (l, ref TLNil)
+
+let tl_flatten tl = 
+  let rec collect tl = 
+    match tl with
+    | TLCons (l, ls) -> l :: collect !ls
+    | TLNil -> []
+  in
+  List.flatten @@ List.rev @@ collect tl
+
+let tl_merge_append tl1 l1 tl2 l2 =
+  let rec last_ref tl =
+    match tl with
+    | TLCons (_, tlr') -> begin
+        match !tlr' with
+        | TLCons _ as tlr -> last_ref tlr
+        | TLNil -> tlr'
+      end
+    | TLNil -> assert false
+  in
+  let lr1 = last_ref tl1 in
+  let lr2 = last_ref tl2 in
+  let ref_nil = ref TLNil in
+  lr1 := TLCons (l1, ref_nil);
+  lr2 := TLCons (l2, ref_nil)
+
+(* kind interface *)
+
+let kind_get k = tl_flatten @@ dsf_get k
+
+(* Constructor and accessors for [row_desc] *)
 
 type set_solution =
   | SSUnion of set_solution * set_solution
@@ -634,7 +672,7 @@ let sprint_tags tags = String.concat "" ["[";String.concat "," tags;"]"]
 let sprint_row row =
   let (from, id) = row.debug_info in
   Printf.sprintf "Row %d from %s kind %s" id from
-    (sprint_tags @@ List.map fst (dsf_get row.row_kind))
+    (sprint_tags @@ List.map fst (kind_get row.row_kind))
 
 let sprint_constrained_ty ty =
   match get_desc ty with
@@ -721,6 +759,7 @@ let intersect_lists l1 l2 = List.filter (fun x -> List.mem x l1) l2
 let subset_lists l1 l2 = List.for_all (fun id -> List.mem id l2) l1
 let exclude_listsq l1 l2 = List.filter (fun id -> not @@ List.memq id l2) l1
 
+type row_kind_list = (label * type_expr option) list
 type row_kind_id = row_kind dsf ref
 type row_kind_class = row_kind dsf
 
@@ -1037,7 +1076,7 @@ let new_id () = cur_id := !cur_id + 1; !cur_id
 
 let create_row ~from ~var ~kind ~fixed ~name : row_desc =
   let debug_info = (from, new_id ()) in
-  { row_kind=dsf_init kind; row_fixed=fixed;
+  { row_kind=dsf_init (tl_init kind); row_fixed=fixed;
     row_name=name; row_var=var; debug_info }
 
 (* [row_fields] subsumes the original [row_repr] *)
@@ -1045,7 +1084,7 @@ let row_fields_ub row =
   match solve_set_type row with
   | Some (_, Some tags) -> Some (List.map (
       fun tag -> tag,
-        let oty = List.assoc_opt tag (dsf_get row.row_kind) in
+        let oty = List.assoc_opt tag (kind_get row.row_kind) in
         match oty with
         | Some ty -> ty
         | None ->
@@ -1059,10 +1098,11 @@ let row_fields_ub row =
 
 let row_fields_lb row =
   match solve_set_type row with
-  | Some (Some tags, _) -> List.map (fun tag -> tag, List.assoc tag (dsf_get row.row_kind)) tags
+  | Some (Some tags, _) -> List.map (fun tag -> tag, List.assoc tag (kind_get row.row_kind)) tags
   | Some (None, _) | None -> []
 
-let row_kind row = dsf_get row.row_kind
+let row_kind_orig row = dsf_get row.row_kind
+let row_kind row = tl_flatten @@ row_kind_orig row
 let row_kind_id row = let (_, id) = dsf_last_link row.row_kind in id
 let row_kind_class row = row.row_kind
 let row_fixed row = row.row_fixed
@@ -1077,7 +1117,7 @@ let row_closed row =
   | None -> true
 
 let get_row_field tag row =
-  List.assoc_opt tag (dsf_get row.row_kind)
+  List.assoc_opt tag (kind_get row.row_kind)
 
 let merge_row_kinds f row row' =
   dsf_merge f row.row_kind row'.row_kind
@@ -1089,15 +1129,14 @@ let set_row_name row row_name =
   { row with row_name }
 
 type row_desc_repr =
-    Row of { kind:row_kind;
+    Row of { kind:row_kind_list;
              closed:bool;
              fixed:fixed_explanation option;
              name:(Path.t * type_expr list) option }
 
 let row_repr row =
-  let closed = row_closed row in
-  Row { kind = dsf_get row.row_kind;
-        closed;
+  Row { kind = row_kind row;
+        closed = row_closed row;
         fixed = row.row_fixed;
         name = row.row_name }
 

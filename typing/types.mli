@@ -301,6 +301,11 @@ val compare_type: type_expr -> type_expr -> int
 
 *)
 
+type 'a tail_list
+
+val tl_flatten : 'a tail_list -> 'a list
+val tl_merge_append: 'a tail_list -> 'a list -> 'a tail_list -> 'a list -> unit
+
 type set_solution =
   | SSUnion of set_solution * set_solution
   | SSIntersection of set_solution * set_solution
@@ -313,7 +318,8 @@ type set_solution =
       string list option   (* ub *)
 
 type constraint_relation = Left | Right | Equal | Unknown
-type row_kind = (label * type_expr option) list
+type row_kind = (label * type_expr option) tail_list
+type row_kind_list = (label * type_expr option) list
 type row_kind_id
 type row_kind_class
 
@@ -337,13 +343,14 @@ val solve_set_type_with_context: row_desc list -> row_desc -> set_solution
 val create_row:
   from: string ->
   var: type_expr ->
-  kind: row_kind ->
+  kind: row_kind_list ->
   fixed: fixed_explanation option ->
   name: (Path.t * type_expr list) option -> row_desc
 
 val row_fields_ub: row_desc -> (label * type_expr option) list option
 val row_fields_lb: row_desc -> (label * type_expr option) list
-val row_kind: row_desc -> row_kind
+val row_kind: row_desc -> row_kind_list
+val row_kind_orig: row_desc -> row_kind
 val row_kind_id: row_desc -> row_kind_id
 val row_kind_class: row_desc -> row_kind_class
 val row_fixed: row_desc -> fixed_explanation option
@@ -363,7 +370,7 @@ val get_row_field: label -> row_desc -> type_expr option option
 
 (** get all fields at once; different from the old [row_repr] *)
 type row_desc_repr =
-    Row of { kind:row_kind;
+    Row of { kind:   row_kind_list;
              closed: bool;
              fixed:  fixed_explanation option;
              name:   (Path.t * type_expr list) option }

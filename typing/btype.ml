@@ -482,7 +482,10 @@ let copy_row scope f fixed var row =
         new_row
   in
   For_copy.register_row_copy scope row new_row;
-  if var == row_var row then add_polyvariant_constraint Equal row new_row; (* romanv: to implement partially shared kind *)
+  if var == row_var row then begin 
+    add_polyvariant_constraint Equal row new_row;
+    tl_merge_append (row_kind_orig row) [] (row_kind_orig new_row) []
+  end;
   new_row
 
                   (*******************************************)

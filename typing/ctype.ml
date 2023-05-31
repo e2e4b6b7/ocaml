@@ -2853,27 +2853,27 @@ and unify_kind k1 k2 =
   | _                                -> assert false
 
 and unify_row_kind_pair env kind1 kind2 =
-  let r1, r2, pairs = merge_row_fields kind1 kind2 in
+  let r1, r2, pairs = merge_row_fields (tl_flatten kind1) (tl_flatten kind2) in
   List.iter
     (fun (tag, t1, t2) ->
       match t1, t2 with
       | None, None -> ()
       | Some _, None | None, Some _ ->
-        (Printf.printf "\n\nFailure 2\n\n"; flush stdout;
-          raise_for Unify (Variant (Incompatible_types_for tag)))
+          raise_for Unify (Variant (Incompatible_types_for tag))
       | Some t1, Some t2 ->
           try unify env t1 t2
           with Unify_trace trace ->
-            (Printf.printf "\n\nFailure 1\n\n"; flush stdout;
             raise_trace_for
-              Unify (Variant (Incompatible_types_for tag) :: trace)))
+              Unify (Variant (Incompatible_types_for tag) :: trace))
     pairs;
-  let common = List.map (fun (tag, t, _) -> tag, t) pairs in
-  List.append common (List.append r1 r2)
+  tl_merge_append kind1 r2 kind2 r1;
+  kind1
 
 and unify_row_kind env row1 row2 =
   merge_row_kinds
-    (fun k1 k2 -> set_unify_relation Equal (fun _ -> unify_row_kind_pair env k1 k2))
+    (fun k1 k2 -> 
+      set_unify_relation Equal (fun _ -> 
+        unify_row_kind_pair env k1 k2))
     row1 row2
 
 and unify_row env row1 row2 =
