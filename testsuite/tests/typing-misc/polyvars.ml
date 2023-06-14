@@ -309,3 +309,10 @@ type t = `A of a
 val inspect : `A of a -> unit = <fun>
 |}]
 
+(* romanv: regression *)
+
+let f a b =
+  match a, b with
+  | `S, `Outside
+  | `S, `Inside -> assert false
+  

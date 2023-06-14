@@ -666,8 +666,8 @@ let sprint_constraint_relation v = match v with
   | Unknown -> "Unknown"
 
 let sprint_tags tags = String.concat "" ["[";String.concat "," tags;"]"]
-(* let sprint_row_id {debug_info=(_, id)} = Printf.sprintf "%d" id *)
-(* let sprint_row_ids rows = String.concat "," @@ List.map sprint_row_id rows *)
+let sprint_row_id {debug_info=(_, id)} = Printf.sprintf "%d" id
+let sprint_row_ids rows = String.concat "," @@ List.map sprint_row_id rows
 
 let sprint_row row =
   let (from, id) = row.debug_info in
@@ -763,11 +763,11 @@ type row_kind_list = (label * type_expr option) list
 type row_kind_id = row_kind dsf ref
 type row_kind_class = row_kind dsf
 
-(* let sprint_htbl pref htbl kp pv =
+let sprint_htbl pref htbl kp pv =
   Printf.fprintf dump "Htbl %s:\n" pref;
   RowDescHtbl.iter (fun k v -> Printf.fprintf dump "%s: %s\n" (kp k) (pv v)) htbl;
   Printf.fprintf dump "\n";
-  flush stdout *)
+  flush stdout
 
 (** edges = ((edges_var_ub, edges_tag_ub), (edges_var_lb, edges_tag_lb)) *)
 
@@ -1014,14 +1014,33 @@ let filter_edges ((e1,e2),(e3,e4)) reachable =
   filter e3;
   filter e4
 
-let solve_set_type_with_context context row =
+let rec pp_context_in_ans context connected ans = 
+  let remap row = 
+    if List.memq row context 
+      then row
+      else begin 
+        let conn = RowDescHtbl.find connected row in
+        let remapped = List.find (fun x -> List.memq x context) conn in
+        Printf.printf "remap %s -> %s\n" (sprint_row row) (sprint_row remapped);
+        remapped
+      end
+  in
+  let re = pp_context_in_ans context connected in
+  match ans with
+  | (SSFail _ | SSTags _) -> ans
+  | SSIntersection (l, r) -> SSIntersection (re l, re r)
+  | SSUnion (l, r) -> SSUnion (re l, re r)
+  | SSVariable row -> SSVariable (remap row)
+
+let solve_set_type_with_context orig_context row =
   let edges = collect_edges () in
   let reachable = find_reachables edges row in
   filter_edges edges reachable;
   let connected = find_components edges in
   let edges = transform_edges edges connected in
-  let context = transform_context context connected in
+  let context = transform_context orig_context connected in
   let ans = solve_set_type_with_context_ context edges row in
+  let ans = pp_context_in_ans orig_context connected ans in
   ans
 
 (* romanv: Could be solved much faster in case of empty context *)
@@ -1055,7 +1074,17 @@ let cp_rows (rows : (row_desc * row_desc) list) : unit =
         Option.iter (add_polyvariant_tags_constrint Left to_) lb;
         Option.iter (add_polyvariant_tags_constrint Right to_) ub
     | SSIntersection (solution, SSVariable row) ->
-        let row = List.assq row rows in
+        let row = 
+          try List.assq row rows 
+          with Not_found -> 
+            Printf.printf "Failure unexpected\n";
+            Printf.printf "row: %s\n" (sprint_row row);
+            let print_p (f, t) = 
+              Printf.sprintf "%s -> %s\n" (sprint_row f) (sprint_row t) in
+            let print_ps ps = String.concat ";" (List.map print_p ps) in
+            Printf.printf "rows: %s\n" (print_ps rows);
+            assert false 
+        in
         add_polyvariant_constraint ~from:"cp_rows" Right to_ row;
         re solution
     | SSUnion (solution, SSVariable row) ->
@@ -1089,7 +1118,7 @@ let row_fields_ub row =
         | Some ty -> ty
         | None ->
           Printf.fprintf dump 
-            "tag %s not found in row %s\n" tag (sprint_row row); 
+            "0 tag %s not found in row %s\n" tag (sprint_row row); 
           flush dump; 
           assert false
       ) tags)
@@ -1098,7 +1127,15 @@ let row_fields_ub row =
 
 let row_fields_lb row =
   match solve_set_type row with
-  | Some (Some tags, _) -> List.map (fun tag -> tag, List.assoc tag (kind_get row.row_kind)) tags
+  | Some (Some tags, _) -> List.map (fun tag -> tag, 
+      let oty = List.assoc_opt tag (kind_get row.row_kind) in
+      match oty with
+      | Some ty -> ty
+      | None ->
+        Printf.fprintf dump 
+          "1 tag %s not found in row %s\n" tag (sprint_row row); 
+        flush dump; 
+        assert false) tags
   | Some (None, _) | None -> []
 
 let row_kind_orig row = dsf_get row.row_kind
