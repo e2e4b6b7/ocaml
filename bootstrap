@@ -11,11 +11,12 @@ make partialclean -j || exit
 # make clean -j || exit
 # ./configure CFLAGS="-Wno-strict-prototypes -Wno-unused-but-set-variable" || exit
 ##########################################
-make world -j || exit
+make world.opt -j || exit
 
 git checkout constraints || exit
 make coreall -j || exit
-make bootstrap || exit
+make bootstrap -j || exit
+make partialclean -j || exit
 make -j || exit
 
 ./clean

@@ -289,6 +289,29 @@ let is_datatype decl=
     Type_record _ | Type_variant _ | Type_open -> true
   | Type_abstract -> false
 
+(** Relation of the unification *)
+
+type unify_relation = Left | Right | Equal | Unknown
+
+let invert_relation v = match v with
+  | Left -> Right
+  | Right -> Left
+  | Unknown -> Unknown
+  | Equal -> Equal
+
+let unify_relation = ref Unknown
+
+let set_unify_relation uv f =
+  Misc.protect_refs [Misc.R (unify_relation, uv)] f
+
+let invert_unify_relation f = set_unify_relation (invert_relation !unify_relation) f
+
+let relation_coerce () =
+  match !unify_relation with
+  | Left -> Types.Left
+  | Right -> Types.Right
+  | Unknown -> Types.Unknown
+  | Equal -> Types.Equal
 
                   (**********************************************)
                   (*  Miscellaneous operations on object types  *)
@@ -1327,7 +1350,7 @@ let instance_label fixed lbl =
 
 (* NB: since this is [unify_var], it raises [Unify], not [Unify_trace] *)
 let unify_var' = (* Forward declaration *)
-  ref (fun _env _ty1 _ty2 -> assert false)
+  ref (fun ?(relation : unify_relation option) _env _ty1 _ty2 -> assert false)
 
 let subst env level priv abbrev oty params args body =
   if List.length params <> List.length args then raise Cannot_subst;
@@ -2419,42 +2442,49 @@ let unify_package env unify_list lv1 p1 fl1 lv2 p2 fl2 =
   || !package_subtype env p1 fl1 p2 fl2
   && !package_subtype env p2 fl2 p1 fl1 then () else raise Not_found
 
-
-type unify_relation = Left | Right | Equal | Unknown
-
-let invert_relation v = match v with
-  | Left -> Right
-  | Right -> Left
-  | Unknown -> Unknown
-  | Equal -> Equal
-
-let unify_relation = ref Unknown
-
-let set_unify_relation uv f =
-  Misc.protect_refs [Misc.R (unify_relation, uv)] f
-
-let invert_unify_relation f = set_unify_relation (invert_relation !unify_relation) f
-
-let relation_coerce () =
-  match !unify_relation with
-  | Left -> Types.Left
-  | Right -> Types.Right
-  | Unknown -> Types.Unknown
-  | Equal -> Types.Equal
-
-let link_type_rel from ty ty' =
+let rec link_type_rel from env ty ty' =
   let tty = Transient_expr.repr ty in
   let tty' = Transient_expr.repr ty' in
   if tty == tty' then () else begin
   let from = Printf.sprintf "link_type_rel; %s" from in
   match tty.desc, tty'.desc with
-  | Tvariant row, Tvariant row' ->
-      add_polyvariant_constraint ~from (relation_coerce ()) row row'
+  | Tvariant _row, Tvariant _row' -> ()
+      (* add_polyvariant_constraint ~from (relation_coerce ()) row row' *)
+  | Tvar _, Tvar _ ->
+      add_constraint (relation_coerce ()) ty ty'
   | Tvar _, Tvariant row' ->
       let row = create_row ~from ~var:(newvar2 (get_level (row_var row'))) ~kind:[] ~fixed:None ~name:None in
       merge_row_kinds (fun _ k -> k) row row';
       add_polyvariant_constraint ~from (relation_coerce ()) row row';
       Transient_expr.set_desc tty (Tvariant row)
+  | Tvar _, Tarrow (l, e1', e2', c) ->
+      let e1 = newvar2 (get_level e1') in
+      let e2 = newvar2 (get_level e2') in
+      Transient_expr.set_desc tty (Tarrow (l, e1, e2, c));
+      invert_unify_relation (fun () -> link_type_rel from env e1 e1');
+      link_type_rel from env e2 e2'
+  | Tvar _, Ttuple tys' -> 
+      let tys = List.map (fun ty -> newvar2 (get_level ty)) tys' in
+      Transient_expr.set_desc tty (Ttuple tys);
+      List.iter2 (fun ty ty' -> link_type_rel from env ty ty') tys tys'
+  (* | Tvar _, Tconstr (p, tys', _) ->
+      let tv = 
+        try (Env.find_type p env).type_variance
+        with Not_found -> 
+          List.map (fun _ -> Variance.unknown) tys' in
+      let tys = List.map (fun ty -> newvar2 (get_level ty)) tys' in
+      Transient_expr.set_desc tty (Tconstr (p, tys, ref Mnil));
+      List.iter2
+        (fun (ty, ty') v -> 
+          if Variance.(mem May_pos v) then 
+            link_type_rel from env ty ty' 
+          else
+          if Variance.(mem May_neg v) then 
+            invert_unify_relation (fun () -> link_type_rel from env ty' ty)
+          else
+            link_type ty ty')
+        (List.combine tys tys') 
+        tv *)
   | _ -> link_type ty ty'
   end
 
@@ -2480,7 +2510,7 @@ let unify1_var env t1 t2 =
         with Escape e ->
           raise_for Unify (Escape e)
       end;
-      link_type_rel "unify1_var" t1 t2; (* romanv: linktype: sure *)
+      link_type_rel "unify1_var" env t1 t2; (* romanv: linktype: sure *)
       true
   | exception Unify_trace _ when !umode = Pattern ->
       false
@@ -2496,7 +2526,7 @@ let record_equation t1 t2 =
 let unify3_var env t1' t2 t2' =
   occur_for Unify !env t1' t2;
   match occur_univar_for Unify !env t2 with
-  | () -> link_type_rel "unify3_var" t1' t2 (* romanv: linktype: sure *)
+  | () -> link_type_rel "unify3_var" !env t1' t2 (* romanv: linktype: sure *)
   | exception Unify_trace _ when !umode = Pattern ->
       reify env t1';
       reify env t2';
@@ -2528,8 +2558,6 @@ let unify3_var env t1' t2 t2' =
       abbreviated.  It would be possible to check whether some
       information is indeed lost, but it probably does not worth it.
 *)
-
-(* Left variance means that left argument should became a supertype of right *)
 
 let rec unify (env:Env.t ref) t1 t2 =
   (* First step: special cases (optimizations) *)
@@ -2563,7 +2591,7 @@ let rec unify (env:Env.t ref) t1 t2 =
                  || has_cached_expansion p2 !a2) ->
         update_level_for Unify !env (get_level t1) t2;
         update_scope_for Unify (get_scope t1) t2;
-        link_type_rel "unify" t1 t2 (* romanv: linktype: sure *)
+        link_type_rel "unify" !env t1 t2 (* romanv: linktype: sure *)
     | (Tconstr (p1, [], _), Tconstr (p2, [], _))
       when Env.has_local_constraints !env
       && is_newtype !env p1 && is_newtype !env p2 ->
@@ -2636,7 +2664,7 @@ and unify3 env t1 t1' t2 t2' =
     begin match !umode with
     | Expression ->
         occur_for Unify !env t1' t2;
-        link_type_rel "unify3" t1' t2 (* romanv: linktype: sure *)
+        link_type_rel "unify3" !env t1' t2 (* romanv: linktype: sure *)
     | Pattern ->
         add_type_equality t1' t2'
     end;
@@ -2924,7 +2952,7 @@ let unify_var env t1 t2 =
         occur_for Unify env t1 t2;
         update_level_for Unify env (get_level t1) t2;
         update_scope_for Unify (get_scope t1) t2;
-        link_type_rel "unify_var" t1 t2; (* romanv: linktype: sure *)
+        link_type_rel "unify_var" env t1 t2; (* romanv: linktype: sure *)
         reset_trace_gadt_instances reset_tracing;
       with Unify_trace trace ->
         reset_trace_gadt_instances reset_tracing;
@@ -2935,6 +2963,9 @@ let unify_var env t1 t2 =
   | _ ->
       unify (ref env) t1 t2
 
+let unify_var ?(relation = Unknown) env t1 t2 =
+  set_unify_relation relation (fun () -> unify_var env t1 t2)
+
 let _ = unify_var' := unify_var
 
 let unify_pairs env ty1 ty2 pairs =
@@ -2944,7 +2975,7 @@ let unify_pairs env ty1 ty2 pairs =
 let unify ?(relation = Unknown) env ty1 ty2 =
   set_unify_relation relation (fun _ -> unify_pairs (ref env) ty1 ty2 [])
 
-let unify_gadt ?(relation = Unknown) ~equations_level ~allow_recursive (env:Env.t ref) ty1 ty2 =
+let unify_gadt ?(relation = assert false) ~equations_level ~allow_recursive (env:Env.t ref) ty1 ty2 =
   set_unify_relation relation (fun _ -> unify_gadt ~equations_level ~allow_recursive env ty1 ty2)
 
 
@@ -3404,7 +3435,7 @@ let rec moregen inst_nongen type_pairs env t1 t2 =
         moregen_occur env (get_level t1) t2;
         update_scope_for Moregen (get_scope t1) t2;
         occur_for Moregen env t1 t2;
-        link_type_rel "moregen(1)" t1 t2 (* romanv: linktype: sure *)
+        link_type t1 t2 (* romanv: linktype: sure *)
     | (Tconstr (p1, [], _), Tconstr (p2, [], _)) when Path.same p1 p2 ->
         ()
     | _ ->
@@ -3418,7 +3449,7 @@ let rec moregen inst_nongen type_pairs env t1 t2 =
             (Tvar _, _) when may_instantiate inst_nongen t1' ->
               moregen_occur env (get_level t1') t2;
               update_scope_for Moregen (get_scope t1') t2;
-              link_type_rel "moregen(2)" t1' t2 (* romanv: linktype: sure *)
+              link_type t1' t2 (* romanv: linktype: sure *)
           | (Tarrow (l1, t1, u1, _), Tarrow (l2, t2, u2, _)) when l1 = l2
             || !Clflags.classic && not (is_optional l1 || is_optional l2) ->
               moregen inst_nongen type_pairs env t1 t2;

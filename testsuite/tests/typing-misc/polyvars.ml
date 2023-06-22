@@ -316,3 +316,11 @@ let f a b =
   | `S, `Outside
   | `S, `Inside -> assert false
   
+
+let mand a b c d = 
+  match a, b, c, d with
+  | true, true, true, true -> true
+  | _ -> false
+
+let f f1 f2 e = mand (f1 e) (f2 e) (f1 `A) (f2 `B)
+

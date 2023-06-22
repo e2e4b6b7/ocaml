@@ -258,7 +258,7 @@ and transl_type_aux env policy styp =
         | Some ty ->
             if get_level ty = Btype.generic_level
               then unify_var
-              else unify ?relation:None
+              else unify
       in
       List.iter2
         (fun (sty, cty) ty' ->

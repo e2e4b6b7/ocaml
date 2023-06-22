@@ -739,7 +739,7 @@ let full_match closing env =  match env with
           env
       in
       let row = type_row () in
-      Printf.printf "%s\n" (sprint_row row);
+      (* Printf.printf "%s\n" (sprint_row row); *)
       if closing then
         (* closing=true, we are considering the variant as closed *)
         List.for_all

@@ -513,6 +513,18 @@ let polyvariants_tag_lb_constraints : (row_desc * label list) list ref = ref []
 let polyvariants_constraints : (row_desc * row_desc) list ref = ref []
 let variables_constraints : (type_expr * type_expr) list ref = ref []
 
+let __add_constraint cs ((l, r) as c) =
+  if List.exists (fun (l', r') -> l' == l && r' == r) !cs
+    then ()
+    else cs := c :: !cs
+
+let _add_constraint relation v1 v2 constraints =
+  let add = __add_constraint constraints in
+  match relation with
+  | Right -> add (v1, v2)
+  | Left -> add (v2, v1)
+  | Equal | Unknown -> add (v1, v2); add (v2, v1)
+
 (**** Representative of a type ****)
 
 let rec repr_link (t : type_expr) d : type_expr -> type_expr =
@@ -560,9 +572,71 @@ let rec set_level ty lv =
 
 (* transient type_expr *)
 
+let sprint_desc = function
+  | Tarrow _ -> "Tarrow"
+  | Tvariant _ -> "Tvariant"
+  | Tvar _ -> "Tvar"
+  | Tunivar _ -> "Tunivar"
+  | Tconstr _ -> "Tconstr"
+  | Tfield _ -> "Tfield"
+  | Tlink _ -> "Tlink"
+  | Tobject _ -> "Tobject"
+  | Tpackage _ -> "Tpackage"
+  | Tnil -> "Tnil"
+  | Ttuple _ -> "Ttuple"
+  | Tpoly _ -> "Tpoly"
+  | Tsubst _ -> "Tsubst"
+
+let dump =
+  let dump = open_out_gen [Open_append; Open_creat] 0o666 "dump.txt" in
+  Printf.fprintf dump "\n-- New env --\n\n";
+  dump
+
+let rec set_desc ty d =
+  let set () = ty.desc <- d in
+  let used ty = 
+    None <> 
+    List.find_opt (fun (d1, d2) -> d1 == ty || d2 == ty) !variables_constraints 
+  in
+  let relations ty =
+    List.filter (fun (d1, d2) -> d1 == ty || d2 == ty) !variables_constraints 
+  in
+  let connected relations ty =
+    List.map (fun (d1, d2) -> if d1 == ty then d2 else d1) relations
+  in
+  let filter_relation ty = 
+    variables_constraints := List.filter (fun (d1, d2) -> not (d1 == ty || d2 == ty)) !variables_constraints
+  in
+  let tty = repr ty in
+  match tty.desc, d with
+  | Tvar _, d ->
+      Printf.fprintf dump "set_desc: Tvar -- %s; used: %b\n" (sprint_desc d) (used tty);
+      if not (used tty) then set () else begin
+        let relations = relations tty in
+        filter_relation tty;
+        let connected = connected relations tty in
+        List.iter (fun ty -> set_desc ty d) connected;
+        set ()
+        (* (match d with
+        | Tvariant _ -> assert false
+        | _ -> set ());
+        match d with
+        | Tvariant _ ->
+            List.iter 
+              (fun (ty1, ty2) -> 
+                match ty1.desc, ty2.desc with
+                | Tvariant row1, Tvariant row2 -> 
+                  __add_constraint polyvariants_constraints (row1, row2)
+                | _ -> ()
+                )
+              relations
+        | _ -> () *)
+      end
+  | _ -> set ()
+
 module Transient_expr = struct
   let create desc ~level ~scope ~id = {desc; level; scope; id}
-  let set_desc ty d = ty.desc <- d
+  let set_desc ty d = set_desc ty d
   let set_stub_desc ty d = assert (ty.desc = Tvar None); ty.desc <- d
   let set_level = set_level
   let set_scope ty sc = ty.scope <- sc
@@ -654,11 +728,6 @@ type set_bound_solution = {
   variables: row_desc list;
 }
 
-let dump =
-  let dump = open_out_gen [Open_append; Open_creat] 0o666 "dump.txt" in
-  Printf.fprintf dump "\n-- New env --\n\n";
-  dump
-
 let sprint_constraint_relation v = match v with
   | Left -> "Left"
   | Right -> "Right"
@@ -685,17 +754,6 @@ module RowDescHtbl = Hashtbl.Make(struct
   let equal = (==)
   let hash = Hashtbl.hash
 end)
-
-let _add_constraint relation v1 v2 constraints =
-  let add ((l, r) as c) cs =
-    if List.exists (fun (l', r') -> l' == l && r' == r) cs
-      then cs
-      else c :: cs
-  in
-  constraints := match relation with
-  | Right -> add (v1, v2) !constraints
-  | Left -> add (v2, v1) !constraints
-  | Equal | Unknown -> add (v1, v2) @@ add (v2, v1) !constraints
 
 let log_new_polyvariant_constraint from relation row1 row2 =
   Printf.fprintf dump "From: %s; Variance: %s\n" from (sprint_constraint_relation relation);
@@ -737,6 +795,7 @@ let check_new_constraint ty1 ty2 =
   | _ -> assert false
 
 let add_constraint ?(from="Unknown source") relation ty1 ty2 =
+  let ty1 = repr ty1 and ty2 = repr ty2 in
   log_new_constraint from relation ty1 ty2;
   check_new_constraint ty1 ty2;
   _add_constraint relation ty1 ty2 variables_constraints
@@ -985,7 +1044,11 @@ let solve_set_type_with_context_ context (edges_ub, edges_lb) (row : row_desc) =
 
   match ub_tags, lb_tags with
   | Some ub_tags, Some lb_tags when not @@ subset_lists lb_tags ub_tags ->
-      Printf.fprintf dump "FAIL on %s: %s; %s\n" (sprint_row row) (sprint_tags ub_tags) (sprint_tags lb_tags);
+      Printf.fprintf dump 
+        "FAIL on %s: %s; %s\n" 
+        (sprint_row row) 
+        (sprint_tags ub_tags) 
+        (sprint_tags lb_tags);
       flush dump;
       SSFail (Some lb_tags, Some ub_tags)
   | _ ->
@@ -1020,9 +1083,7 @@ let rec pp_context_in_ans context connected ans =
       then row
       else begin 
         let conn = RowDescHtbl.find connected row in
-        let remapped = List.find (fun x -> List.memq x context) conn in
-        Printf.printf "remap %s -> %s\n" (sprint_row row) (sprint_row remapped);
-        remapped
+        List.find (fun x -> List.memq x context) conn
       end
   in
   let re = pp_context_in_ans context connected in
@@ -1074,17 +1135,7 @@ let cp_rows (rows : (row_desc * row_desc) list) : unit =
         Option.iter (add_polyvariant_tags_constrint Left to_) lb;
         Option.iter (add_polyvariant_tags_constrint Right to_) ub
     | SSIntersection (solution, SSVariable row) ->
-        let row = 
-          try List.assq row rows 
-          with Not_found -> 
-            Printf.printf "Failure unexpected\n";
-            Printf.printf "row: %s\n" (sprint_row row);
-            let print_p (f, t) = 
-              Printf.sprintf "%s -> %s\n" (sprint_row f) (sprint_row t) in
-            let print_ps ps = String.concat ";" (List.map print_p ps) in
-            Printf.printf "rows: %s\n" (print_ps rows);
-            assert false 
-        in
+        let row = List.assq row rows in
         add_polyvariant_constraint ~from:"cp_rows" Right to_ row;
         re solution
     | SSUnion (solution, SSVariable row) ->
@@ -1118,7 +1169,7 @@ let row_fields_ub row =
         | Some ty -> ty
         | None ->
           Printf.fprintf dump 
-            "0 tag %s not found in row %s\n" tag (sprint_row row); 
+            "ub: tag %s not found in row %s\n" tag (sprint_row row); 
           flush dump; 
           assert false
       ) tags)
@@ -1133,7 +1184,7 @@ let row_fields_lb row =
       | Some ty -> ty
       | None ->
         Printf.fprintf dump 
-          "1 tag %s not found in row %s\n" tag (sprint_row row); 
+          "lb: tag %s not found in row %s\n" tag (sprint_row row); 
         flush dump; 
         assert false) tags
   | Some (None, _) | None -> []
@@ -1207,24 +1258,12 @@ let undo_change = function
 type snapshot = changes ref * int
 let last_snapshot = Local_store.s_ref 0
 
-let sprint_desc = function
-  | Tarrow _ -> "Tarrow"
-  | Tvariant _ -> "Tvariant"
-  | Tvar _ -> "Tvar"
-  | Tunivar _ -> "Tunivar"
-  | Tconstr _ -> "Tconstr"
-  | Tfield _ -> "Tfield"
-  | Tlink _ -> "Tlink"
-  | Tobject _ -> "Tobject"
-  | Tpackage _ -> "Tpackage"
-  | Tnil -> "Tnil"
-  | Ttuple _ -> "Ttuple"
-  | Tpoly _ -> "Tpoly"
-  | Tsubst _ -> "Tsubst"
-
 let dump_link ty ty' =
   if Sys.file_exists "/dump_link" then
-  Printf.fprintf dump "link_type: %s - %s\n" (sprint_desc ty.desc) (sprint_desc ty'.desc)
+  Printf.fprintf dump 
+    "link_type: %s - %s\n" 
+    (sprint_desc ty.desc) 
+    (sprint_desc ty'.desc)
 
 let log_type ty =
   if ty.id <= !last_snapshot then log_change (Ctype (ty, ty.desc))
