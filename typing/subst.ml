@@ -163,7 +163,10 @@ let rec typexp copy_scope s ty =
           if s.for_saving then newpersty (norm desc)
           else newty2 ~level:(get_level ty) desc
         in
-        For_copy.redirect_desc copy_scope ty (Tsubst (ty', None));
+        Types.variable_group ty |>
+        Seq.iter (fun ty -> 
+          For_copy.redirect_desc copy_scope ty (Tsubst (ty', None));
+          For_copy.register_var_copy copy_scope ty ty');
         ty'
       else ty
   | Tsubst (ty, _) ->
@@ -237,6 +240,8 @@ let rec typexp copy_scope s ty =
           end
       | Tfield(_label, kind, _t1, t2) when field_kind_repr kind = Fabsent ->
           Tlink (typexp copy_scope s t2)
+      | Tvar _ -> 
+          assert false
       | _ -> copy_type_desc (typexp copy_scope s) desc
     in
     Transient_expr.set_stub_desc ty' desc;

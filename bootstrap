@@ -14,8 +14,8 @@ make partialclean -j || exit
 make world.opt -j || exit
 
 git checkout constraints || exit
-make coreall -j || exit
-make bootstrap -j || exit
+make coreall || exit
+make bootstrap || exit
 make partialclean -j || exit
 make -j || exit
 

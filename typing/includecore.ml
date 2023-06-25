@@ -572,12 +572,18 @@ module Variant_diffing = struct
           (Record_diffing.compare env ~loc params1 params2 l1 l2)
     | Types.Cstr_record _, _ -> Some (Kind First : constructor_mismatch)
     | _, Types.Cstr_record _ -> Some (Kind Second : constructor_mismatch)
+  
+  let compare_constructor_arguments ~loc env params1 params2 arg1 arg2 =
+    match compare_constructor_arguments ~loc env params1 params2 arg1 arg2 with
+    | Some _ -> assert false
+    | None -> None
 
   let compare_constructors ~loc env params1 params2 res1 res2 args1 args2 =
     match res1, res2 with
     | Some r1, Some r2 ->
+        (* Printf.printf "compare_constructors: %s %s\n" (sprint_ty r1) (sprint_ty r2); *)
         begin match Ctype.equal env true [r1] [r2] with
-        | exception Ctype.Equality err -> Some (Type err)
+        | exception Ctype.Equality err -> assert false; Some (Type err)
         | () -> compare_constructor_arguments ~loc env [r1] [r2] args1 args2
         end
     | Some _, None -> Some (Explicit_return_type First)
@@ -630,6 +636,7 @@ module Variant_diffing = struct
       ({pos; data=cd1}: D.left)
       ({data=cd2; _}: D.right) =
     let name1, name2 = Ident.name cd1.cd_id, Ident.name cd2.cd_id in
+    Printf.printf "test: %s %s\n" name1 name2;
     if  name1 <> name2 then
       let types_match =
         match compare_constructors ~loc env params1 params2
@@ -864,13 +871,13 @@ let type_declarations ?(equality = false) ~loc env ~mark name
         let open Variance in
         let imp a b = not a || b in
         let (co1,cn1) = get_upper v1 and (co2,cn2) = get_upper v2 in
-        (if abstr then (imp co1 co2 && imp cn1 cn2)
-         else if opn || constrained ty then (co1 = co2 && cn1 = cn2)
+        (if abstr then imp co1 co2 && imp cn1 cn2
+         else if opn || constrained ty then co1 = co2 && cn1 = cn2
          else true) &&
         let (p1,n1,i1,j1) = get_lower v1 and (p2,n2,i2,j2) = get_lower v2 in
         imp abstr (imp p2 p1 && imp n2 n1 && imp i2 i1 && imp j2 j1))
       decl2.type_params (List.combine decl1.type_variance decl2.type_variance)
-  then None else Some Variance
+  then None else assert false
 
 (* Inclusion between extension constructors *)
 

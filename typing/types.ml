@@ -506,149 +506,30 @@ let rec is_commu_ok : type a. a commutable_gen -> bool = function
 let commu_ok = Cok
 let commu_var () = Cvar {commu=Cunknown}
 
-(*** Global subtyping constraints ***)
-
-let polyvariants_tag_ub_constraints : (row_desc * label list) list ref = ref []
-let polyvariants_tag_lb_constraints : (row_desc * label list) list ref = ref []
-let polyvariants_constraints : (row_desc * row_desc) list ref = ref []
-let variables_constraints : (type_expr * type_expr) list ref = ref []
-
-let __add_constraint cs ((l, r) as c) =
-  if List.exists (fun (l', r') -> l' == l && r' == r) !cs
-    then ()
-    else cs := c :: !cs
-
-let _add_constraint relation v1 v2 constraints =
-  let add = __add_constraint constraints in
-  match relation with
-  | Right -> add (v1, v2)
-  | Left -> add (v2, v1)
-  | Equal | Unknown -> add (v1, v2); add (v2, v1)
-
-(**** Representative of a type ****)
-
-let rec repr_link (t : type_expr) d : type_expr -> type_expr =
- function
-   {desc = Tlink t' as d'} ->
-     repr_link t d' t'
- | {desc = Tfield (_, k, _, t') as d'}
-   when field_kind_internal_repr k = FKabsent ->
-     repr_link t d' t'
- | t' ->
-     log_change (Ccompress (t, t.desc, d));
-     t.desc <- d;
-     t'
-
-let repr_link1 t = function
-   {desc = Tlink t' as d'} ->
-     repr_link t d' t'
- | {desc = Tfield (_, k, _, t') as d'}
-   when field_kind_internal_repr k = FKabsent ->
-     repr_link t d' t'
- | t' -> t'
-
-let repr t =
-  match t.desc with
-   Tlink t' ->
-     repr_link1 t t'
- | Tfield (_, k, _, t') when field_kind_internal_repr k = FKabsent ->
-     repr_link1 t t'
- | _ -> t
-
-(* getters for type_expr *)
-
-let get_desc t = (repr t).desc
-let get_level t = (repr t).level
-let get_scope t = (repr t).scope
-let get_id t = (repr t).id
-
-let rec set_level ty lv = 
-  ty.level <- lv;
-  List.iter 
-    (fun (l, r) -> 
-      if l == ty && get_level r != lv then set_level r lv;
-      if r == ty && get_level l != lv then set_level l lv)
-    !variables_constraints
-
-(* transient type_expr *)
-
-let sprint_desc = function
-  | Tarrow _ -> "Tarrow"
-  | Tvariant _ -> "Tvariant"
-  | Tvar _ -> "Tvar"
-  | Tunivar _ -> "Tunivar"
-  | Tconstr _ -> "Tconstr"
-  | Tfield _ -> "Tfield"
-  | Tlink _ -> "Tlink"
-  | Tobject _ -> "Tobject"
-  | Tpackage _ -> "Tpackage"
-  | Tnil -> "Tnil"
-  | Ttuple _ -> "Ttuple"
-  | Tpoly _ -> "Tpoly"
-  | Tsubst _ -> "Tsubst"
+(** Utils *)
 
 let dump =
   let dump = open_out_gen [Open_append; Open_creat] 0o666 "dump.txt" in
   Printf.fprintf dump "\n-- New env --\n\n";
   dump
 
-let rec set_desc ty d =
-  let set () = ty.desc <- d in
-  let used ty = 
-    None <> 
-    List.find_opt (fun (d1, d2) -> d1 == ty || d2 == ty) !variables_constraints 
-  in
-  let relations ty =
-    List.filter (fun (d1, d2) -> d1 == ty || d2 == ty) !variables_constraints 
-  in
-  let connected relations ty =
-    List.map (fun (d1, d2) -> if d1 == ty then d2 else d1) relations
-  in
-  let filter_relation ty = 
-    variables_constraints := List.filter (fun (d1, d2) -> not (d1 == ty || d2 == ty)) !variables_constraints
-  in
-  let tty = repr ty in
-  match tty.desc, d with
-  | Tvar _, d ->
-      Printf.fprintf dump "set_desc: Tvar -- %s; used: %b\n" (sprint_desc d) (used tty);
-      if not (used tty) then set () else begin
-        let relations = relations tty in
-        filter_relation tty;
-        let connected = connected relations tty in
-        List.iter (fun ty -> set_desc ty d) connected;
-        set ()
-        (* (match d with
-        | Tvariant _ -> assert false
-        | _ -> set ());
-        match d with
-        | Tvariant _ ->
-            List.iter 
-              (fun (ty1, ty2) -> 
-                match ty1.desc, ty2.desc with
-                | Tvariant row1, Tvariant row2 -> 
-                  __add_constraint polyvariants_constraints (row1, row2)
-                | _ -> ()
-                )
-              relations
-        | _ -> () *)
-      end
-  | _ -> set ()
+let rec uniq l =
+  match l with
+  | [] -> []
+  | h :: t -> h :: uniq (List.filter (fun e -> not (e == h)) t)
 
-module Transient_expr = struct
-  let create desc ~level ~scope ~id = {desc; level; scope; id}
-  let set_desc ty d = set_desc ty d
-  let set_stub_desc ty d = assert (ty.desc = Tvar None); ty.desc <- d
-  let set_level = set_level
-  let set_scope ty sc = ty.scope <- sc
-  let coerce ty = ty
-  let repr = repr
-  let type_expr ty = ty
-end
+let merge_lists_compare cmp l1 l2 = List.sort_uniq cmp @@ List.append l1 l2
+let intersect_lists l1 l2 = List.filter (fun x -> List.mem x l1) l2
 
-(* Comparison for [type_expr]; cannot be used for functors *)
+(** Checks that l1 is subset of l2 *)
+let subset_lists l1 l2 = List.for_all (fun id -> List.mem id l2) l1
+let exclude_listsq l1 l2 = List.filter (fun id -> not @@ List.memq id l2) l1
 
-let eq_type t1 t2 = t1 == t2 || repr t1 == repr t2
-let compare_type t1 t2 = compare (get_id t1) (get_id t2)
+let rec is_var ty =
+  match ty.desc with
+  | Tsubst (ty, _) -> is_var ty
+  | Tvar _ -> true
+  | _ -> false
 
 (* dsf interface *)
 
@@ -677,6 +558,346 @@ let dsf_merge f dsf dsf' =
   v_ref := DsfLink dsf_v;
   v_ref' := DsfLink dsf_v;
   assert (dsf_get dsf == dsf_get dsf')
+
+(*** Global subtyping constraints ***)
+
+module RowDescHtbl = Hashtbl.Make(struct
+  type t = row_desc
+  let equal = (==)
+  let hash = Hashtbl.hash
+end)
+
+module RowDescSet = Set.Make(struct
+  type t = row_desc
+  let equal = (==)
+  let compare r1 r2 = Hashtbl.hash r1 - Hashtbl.hash r2
+end)
+
+module TyHtbl = Hashtbl.Make(struct
+  type t = type_expr
+  let equal ty ty' = ty.id = ty'.id
+  let hash ty = ty.id
+end)
+
+module TySet = Set.Make(struct
+  type t = type_expr
+  let equal ty ty' = ty.id = ty'.id
+  let compare ty1 ty2 = ty1.id - ty2.id
+end)
+
+let polyvariants_tag_ub_constraints : (row_desc * label list) list ref = ref []
+let polyvariants_tag_lb_constraints : (row_desc * label list) list ref = ref []
+let polyvariants_constraints : (row_desc * row_desc) list ref = ref []
+let variables_constraints : (type_expr * type_expr) list ref = ref []
+
+let polyvariants_constraints_groups = RowDescHtbl.create 17
+let variables_constraints_groups = TyHtbl.create 17
+
+(** New constraints addition *)
+
+let add_constraint relation v1 v2 constraints =
+  let add_deduplicated constraints ((l, r) as constr) =
+    if not @@ List.exists (fun (l', r') -> l' == l && r' == r) !constraints
+      then constraints := constr :: !constraints 
+  in
+  let add = add_deduplicated constraints in
+  match relation with
+  | Right -> add (v1, v2)
+  | Left -> add (v2, v1)
+  | Equal | Unknown -> add (v1, v2); add (v2, v1) 
+
+let add_variables_constraint relation v1 v2 =
+  assert (is_var v1 && is_var v2);
+  let ensure v =
+    match TyHtbl.find_opt variables_constraints_groups v with
+    | Some dsf -> dsf
+    | None -> 
+        let dsf = dsf_init (TySet.singleton v) in
+        TyHtbl.add variables_constraints_groups v dsf;
+        dsf
+  in
+  add_constraint relation v1 v2 variables_constraints;
+  dsf_merge TySet.union (ensure v1) (ensure v2)
+
+let add_polyvariants_constraints relation row1 row2 =
+  let ensure row =
+    match RowDescHtbl.find_opt polyvariants_constraints_groups row with
+    | Some dsf -> dsf
+    | None -> 
+        let dsf = dsf_init (RowDescSet.singleton row) in
+        RowDescHtbl.add polyvariants_constraints_groups row dsf;
+        dsf
+  in
+  add_constraint relation row1 row2 polyvariants_constraints;
+  dsf_merge RowDescSet.union (ensure row1) (ensure row2)
+
+(** Constraints utils *)
+
+let is_constrained ty =
+  TyHtbl.mem variables_constraints_groups ty
+
+let get_variable_group ty =
+  match TyHtbl.find_opt variables_constraints_groups ty with
+  | Some g -> dsf_get g
+  | None -> TySet.singleton ty
+
+let get_polyvariant_group ty =
+  match RowDescHtbl.find_opt polyvariants_constraints_groups ty with
+  | Some g -> dsf_get g
+  | None -> RowDescSet.singleton ty
+
+let variable_group ty =
+  get_variable_group ty |> TySet.to_seq
+
+(** Collection of constraints edges *)
+
+let collect_tag_edges group constraints merge =
+  let edges_tag = RowDescHtbl.create 13 in
+  List.iter
+    (fun (row, tags) ->
+      if RowDescSet.mem row group then
+        match RowDescHtbl.find_opt edges_tag row with
+        | None -> 
+            RowDescHtbl.add edges_tag row tags
+        | Some tags' -> 
+            RowDescHtbl.replace edges_tag row (merge tags tags'))
+    constraints;
+  RowDescHtbl.filter_map_inplace
+    (fun _ tags -> Some (uniq tags)) (* romanv: may be redundant *)
+    edges_tag;
+  edges_tag
+  
+let merge_tags_ub = intersect_lists
+let collect_tag_ub_edges group =
+  collect_tag_edges group !polyvariants_tag_ub_constraints merge_tags_ub
+
+let merge_tags_lb = merge_lists_compare String.compare
+let collect_tag_lb_edges group =
+  collect_tag_edges group !polyvariants_tag_lb_constraints merge_tags_lb
+
+let collect_polyvariants_edges group =
+  let constraints = !polyvariants_constraints in
+  let edges_ub = RowDescHtbl.create 13 in
+  let edges_lb = RowDescHtbl.create 13 in
+  let add_constraint htbl row1 row2 =
+    match RowDescHtbl.find_opt htbl row1 with
+    | None -> RowDescHtbl.add htbl row1 [row2]
+    | Some rows -> RowDescHtbl.replace htbl row1 (row2 :: rows) in
+  List.iter
+    (fun (row1, row2) ->
+      if RowDescSet.mem row1 group then begin
+        assert (RowDescSet.mem row2 group);
+        add_constraint edges_ub row1 row2;
+        add_constraint edges_lb row2 row1
+      end)
+    constraints;
+  edges_ub, edges_lb
+
+let collect_variables_edges group = 
+  let constraints = !variables_constraints in
+  let edges_ub = TyHtbl.create 13 in
+  let edges_lb = TyHtbl.create 13 in
+  let add_constraint htbl row1 row2 =
+    match TyHtbl.find_opt htbl row1 with
+    | None -> TyHtbl.add htbl row1 [row2]
+    | Some rows -> TyHtbl.replace htbl row1 (row2 :: rows) in
+  List.iter
+    (fun (v1, v2) ->
+      if TySet.mem v1 group then begin
+        assert (TySet.mem v2 group);
+        add_constraint edges_ub v1 v2;
+        add_constraint edges_lb v2 v1
+      end)
+    constraints;
+  edges_ub, edges_lb
+
+(** printing *)
+
+let sprint_group ty =
+  variable_group ty |> Seq.map (fun ty -> ty.id) |> Seq.map Int.to_string |> List.of_seq |> String.concat ", "
+
+let rec sprint_desc = function
+  | Tarrow (_, l, r, _) -> Printf.sprintf "Tarrow %s %s" (sprint_ty l) (sprint_ty r)
+  | Tvariant _ -> "Tvariant"
+  | Tvar (Some n) -> Printf.sprintf "Tvar %s" n
+  | Tvar None -> "Tvar _"
+  | Tunivar _ -> "Tunivar"
+  | Tconstr (p, tl, _) -> 
+      Printf.sprintf "Tconstr %s(%s)" 
+        (match Path.flatten p with 
+        | `Contains_apply -> "??" 
+        | `Ok (i, l) -> Printf.sprintf "%s.%s" (String.concat "." l) (Ident.name i))
+        (String.concat ", " (List.map sprint_ty tl))
+  | Tfield _ -> "Tfield"
+  | Tlink ty -> Printf.sprintf "Tlink %s" (sprint_ty ty)
+  | Tobject _ -> "Tobject"
+  | Tpackage _ -> "Tpackage"
+  | Tnil -> "Tnil"
+  | Ttuple _ -> "Ttuple"
+  | Tpoly _ -> "Tpoly"
+  | Tsubst (ty, _oty) -> Printf.sprintf "Tsubst %s" (sprint_ty ty)
+
+and sprint_ty ty = 
+  Printf.sprintf "[%d:%s:%s]" ty.id (sprint_desc ty.desc) (sprint_group ty)
+
+(** Graph utils *)
+
+(** is variables are strongly connected in constraints graph 
+    (consequently they are equal) *)
+let is_sc_variables (edges, _) v1 v2 =
+  let rec check_path visited final current =
+    if current == final then true else
+    if TySet.mem current visited then false else begin
+    let visited = TySet.add current visited in
+    let re = check_path visited final in
+    match TyHtbl.find_opt edges current with
+    | None -> false
+    | Some direct -> List.exists re direct
+    end
+  in
+  let v1_to_v2 = check_path TySet.empty v2 v1 in
+  let v2_to_v1 = check_path TySet.empty v1 v2 in
+  v1_to_v2 && v2_to_v1
+
+(**** Representative of a type ****)
+
+let rec repr_link (t : type_expr) d : type_expr -> type_expr =
+ function
+   {desc = Tlink t' as d'} ->
+     repr_link t d' t'
+ | {desc = Tfield (_, k, _, t') as d'}
+   when field_kind_internal_repr k = FKabsent ->
+     repr_link t d' t'
+ | t' ->
+     log_change (Ccompress (t, t.desc, d));
+     t.desc <- d;
+     t'
+
+let repr_link1 t = function
+   {desc = Tlink t' as d'} ->
+     repr_link t d' t'
+ | {desc = Tfield (_, k, _, t') as d'}
+   when field_kind_internal_repr k = FKabsent ->
+     repr_link t d' t'
+ | t' -> t'
+
+let repr_link1 t t' = 
+  let t = repr_link1 t t' in
+  match t.desc with
+  | Tlink _ -> assert false
+  | _ -> t
+
+let repr t =
+  match t.desc with
+   Tlink t' ->
+     repr_link1 t t'
+ | Tfield (_, k, _, t') when field_kind_internal_repr k = FKabsent ->
+     repr_link1 t t'
+ | _ -> t
+
+(* getters for type_expr *)
+
+let get_desc t = (repr t).desc
+let get_level t = (repr t).level
+let get_scope t = (repr t).scope
+let get_id t = (repr t).id
+
+(* transient type_expr *)
+
+let rec _set_scope ty sc =
+  if ty.scope <> sc then
+    variable_group ty |> Seq.iter (fun ty -> ty.scope <- sc)
+
+let set_scope ty sc =
+  if is_constrained ty 
+  then _set_scope ty sc
+  else ty.scope <- sc
+
+let rec _set_level ty lv = 
+  if ty.level <> lv then
+    variable_group ty |> Seq.iter (fun ty -> ty.level <- lv)
+
+let set_level ty lv =
+  if is_constrained ty 
+  then _set_level ty lv
+  else ty.level <- lv
+
+let rec merge_group ty =
+  let ty = repr ty in
+  variable_group ty |>
+  Seq.iter (fun ty' -> if ty' <> ty then ty'.desc <- Tlink ty)
+
+let rec set_desc ty d =
+  Printf.fprintf dump "set_desc: %s <- %s\n" (sprint_ty ty) (sprint_desc d);
+  
+  let is_tsubst_desc d =
+    match d with
+    | Tsubst _ -> true
+    | _ -> false
+  in
+  let is_tsubst ty = is_tsubst_desc ty.desc in
+  
+  let set () = ty.desc <- d in
+
+  if is_tsubst_desc d || is_tsubst ty then set () else begin
+
+  let tty = repr ty in
+
+  if not (is_constrained tty &&
+    List.exists (fun (d1, d2) -> d1 == tty || d2 == tty) !variables_constraints)
+  then set () else begin
+
+  let group = get_variable_group tty in
+
+  let ty_in_group ty = TySet.mem ty group in
+  let cstr_not_in_group (ty1, ty2) = not (ty_in_group ty1 || ty_in_group ty2) in
+  variables_constraints := List.filter cstr_not_in_group !variables_constraints;
+
+  TySet.iter (fun ty' -> TyHtbl.remove variables_constraints_groups ty') group;
+
+  match d with
+  | Tlink ty' ->
+      let tty' = repr ty' in
+      TySet.iter
+        (fun ty'' -> if not (tty' == ty'') then ty''.desc <- (Tlink tty'))
+        group;
+  | _ ->
+      TySet.iter
+        (fun ty'' -> ty''.desc <- (Tlink ty))
+        group;
+      set ()
+  end
+  end
+
+module Transient_expr = struct
+  let create desc ~level ~scope ~id = {desc; level; scope; id}
+  let set_desc = set_desc
+  let set_stub_desc ty d = assert (ty.desc = Tvar None); set_desc ty d
+  let set_level = set_level
+  let set_scope = set_scope
+  let coerce ty = ty
+  let repr = repr
+  let type_expr ty = ty
+end
+
+(* Comparison for [type_expr]; cannot be used for functors *)
+
+let eq_type t1 t2 = 
+  (* let () = Printf.printf "eq_type: %s - %s\n" (sprint_ty t1) (sprint_ty t2) in *)
+  t1 == t2 ||
+  let t1 = repr t1 and t2 = repr t2 in
+  (* let () = Printf.printf "eq_type: %s - %s\n" (sprint_ty t1) (sprint_ty t2) in *)
+  t1 == t2 || 
+  is_constrained t1 && is_constrained t2 &&
+  let group = get_variable_group t1 in
+  TySet.mem t2 group &&
+  (* let () = Printf.printf "eq_type: in group\n" in *)
+  let edges = collect_variables_edges group in
+  let ans = is_sc_variables edges t1 t2 in
+  (* let () = Printf.printf "eq_type: %b\n" ans in *)
+  ans
+
+let compare_type t1 t2 = compare (get_id t1) (get_id t2)
 
 (* tail list interface *)
 
@@ -743,18 +964,6 @@ let sprint_row row =
   Printf.sprintf "Row %d from %s kind %s" id from
     (sprint_tags @@ List.map fst (kind_get row.row_kind))
 
-let sprint_constrained_ty ty =
-  match get_desc ty with
-  | Tvariant row -> sprint_row row
-  | Tvar _ -> "TVar"
-  | _ -> assert false
-
-module RowDescHtbl = Hashtbl.Make(struct
-  type t = row_desc
-  let equal = (==)
-  let hash = Hashtbl.hash
-end)
-
 let log_new_polyvariant_constraint from relation row1 row2 =
   Printf.fprintf dump "From: %s; Variance: %s\n" from (sprint_constraint_relation relation);
   Printf.fprintf dump "%s -- %s\n\n" (sprint_row row1) (sprint_row row2);
@@ -762,8 +971,8 @@ let log_new_polyvariant_constraint from relation row1 row2 =
 
 let add_polyvariant_constraint ?(from="Unknown source") relation row1 row2 =
   log_new_polyvariant_constraint from relation row1 row2;
-  _add_constraint relation row1 row2 polyvariants_constraints;
-  _add_constraint relation row1.row_var row2.row_var variables_constraints
+  add_polyvariants_constraints relation row1 row2;
+  add_variables_constraint relation row1.row_var row2.row_var
 
 let log_new_polyvariant_tags_constraint relation row1 tags =
   Printf.fprintf dump "Variance: %s\n" (sprint_constraint_relation relation);
@@ -785,38 +994,19 @@ let add_polyvariant_tags_constrint relation row tags =
 
 let log_new_constraint from relation ty1 ty2 =
   Printf.fprintf dump "From: %s; Variance: %s\n" from (sprint_constraint_relation relation);
-  Printf.fprintf dump "%s -- %s\n\n" (sprint_constrained_ty ty1) (sprint_constrained_ty ty2);
+  Printf.fprintf dump "%s -- %s\n\n" (sprint_ty ty1) (sprint_ty ty2);
   flush dump
-
-let check_new_constraint ty1 ty2 =
-  match get_desc ty1, get_desc ty2 with
-  | Tvar _, Tvar _ -> ()
-  | Tvariant _, Tvariant _ -> assert false
-  | _ -> assert false
 
 let add_constraint ?(from="Unknown source") relation ty1 ty2 =
   let ty1 = repr ty1 and ty2 = repr ty2 in
   log_new_constraint from relation ty1 ty2;
-  check_new_constraint ty1 ty2;
-  _add_constraint relation ty1 ty2 variables_constraints
+  add_variables_constraint relation ty1 ty2
 
 let get_imediate_subtypes row =
   List.map fst @@ List.filter (fun (_, r) -> r == row) !polyvariants_constraints
 
 let get_imediate_uptypes row =
   List.map snd @@ List.filter (fun (r, _) -> r == row) !polyvariants_constraints
-
-let rec uniq l =
-  match l with
-  | [] -> []
-  | h :: t -> h :: uniq (List.filter (fun e -> not (e == h)) t)
-
-let merge_lists_compare cmp l1 l2 = List.sort_uniq cmp @@ List.append l1 l2
-let intersect_lists l1 l2 = List.filter (fun x -> List.mem x l1) l2
-(* let intersect_lists_assoc l1 l2 = List.filter (fun (x, _) -> List.mem x l1) l2 *)
-(* Checks that l1 is subset of l2 *)
-let subset_lists l1 l2 = List.for_all (fun id -> List.mem id l2) l1
-let exclude_listsq l1 l2 = List.filter (fun id -> not @@ List.memq id l2) l1
 
 type row_kind_list = (label * type_expr option) list
 type row_kind_id = row_kind dsf ref
@@ -830,164 +1020,113 @@ let sprint_htbl pref htbl kp pv =
 
 (** edges = ((edges_var_ub, edges_tag_ub), (edges_var_lb, edges_tag_lb)) *)
 
-let collect_tag_edges constraints merge =
-  let edges_tag = RowDescHtbl.create 13 in
-  List.iter
-    (fun (row, tags) ->
-      match RowDescHtbl.find_opt edges_tag row with
-      | None -> RowDescHtbl.add edges_tag row tags
-      | Some tags' -> RowDescHtbl.replace edges_tag row (merge tags tags'))
-    constraints;
-  RowDescHtbl.filter_map_inplace
-    (fun _row tags -> Some (uniq tags))
-    edges_tag;
-  edges_tag
-
-let merge_tags_ub = intersect_lists
-let merge_tags_lb = merge_lists_compare String.compare
-
-let collect_tag_ub_edges () =
-  collect_tag_edges !polyvariants_tag_ub_constraints merge_tags_ub
-
-let collect_tag_lb_edges () =
-  collect_tag_edges !polyvariants_tag_lb_constraints merge_tags_lb
-
-let collect_var_edges () =
-  let constraints = !polyvariants_constraints in
-  let edges_var_ub = RowDescHtbl.create 13 in
-  let edges_var_lb = RowDescHtbl.create 13 in
-  let add_constraint htbl row1 row2 =
-    match RowDescHtbl.find_opt htbl row1 with
-    | None -> RowDescHtbl.add htbl row1 [row2]
-    | Some rows -> RowDescHtbl.replace htbl row1 (row2 :: rows) in
-  List.iter
-    (fun (row1, row2) ->
-      add_constraint edges_var_ub row1 row2;
-      add_constraint edges_var_lb row2 row1)
-    constraints;
-  edges_var_ub, edges_var_lb
-
-let collect_edges () =
-  let (edges_var_ub, edges_var_lb) = collect_var_edges () in
-  let edges_tag_ub = collect_tag_ub_edges () in
-  let edges_tag_lb = collect_tag_lb_edges () in
-  ((edges_var_ub, edges_tag_ub),(edges_var_lb, edges_tag_lb))
-
-let _iter_reachables f edges row =
-  let visited = RowDescHtbl.create 17 in
-  let rec calc_reachable row =
-    if RowDescHtbl.mem visited row then () else begin
-    RowDescHtbl.add visited row ();
-    f row;
-    match RowDescHtbl.find_opt edges row with
-    | None -> ()
-    | Some direct -> List.iter calc_reachable direct
-    end
-  in
-  calc_reachable row
-
-let find_reachables ((edges, _), (edges', _)) row =
-  let reachable = RowDescHtbl.create 17 in
-  let add row = RowDescHtbl.add reachable row () in
-  _iter_reachables add edges row;
-  _iter_reachables add edges' row;
-  reachable
+let collect_edges group =
+  let (edges_var_ub, edges_var_lb) = collect_polyvariants_edges group in
+  let edges_tag_ub = collect_tag_ub_edges group in
+  let edges_tag_lb = collect_tag_lb_edges group in
+  ((edges_var_ub, edges_tag_ub), (edges_var_lb, edges_tag_lb))
 
 (* romanv: Maybe we can merge this components in single type for performance *)
-let find_components ((edges, _), _) =
+(* romanv: Should be rewrited in a linear complexity *)
+(* classes of equivalence (strongly connected components in constraints graph) *)
+let find_classes ((edges, _), _) =
   let reachable = RowDescHtbl.create 17 in
   let rec calc_reachable visited id =
-    if RowDescHtbl.mem visited id then () else begin
-    RowDescHtbl.add visited id ();
+    if RowDescSet.mem id visited then visited else begin
+    let visited = RowDescSet.add id visited in
     match RowDescHtbl.find_opt edges id with
-    | None -> ()
-    | Some direct -> List.iter (calc_reachable visited) direct
+    | None -> visited
+    | Some direct -> List.fold_left (fun visited id -> calc_reachable visited id) visited direct
     end
   in
   RowDescHtbl.iter
-    (fun id _ ->
-      let visited = RowDescHtbl.create 17 in
-      calc_reachable visited id;
-      let visited = RowDescHtbl.fold (fun id _ acc -> id :: acc) visited [] in
-      RowDescHtbl.add reachable id visited)
+    (fun id _ ->      
+      RowDescHtbl.add reachable id (calc_reachable (RowDescSet.empty) id))
     edges;
   let connected = RowDescHtbl.create 17 in
-  RowDescHtbl.iter (fun id1 reachable1 ->
-    List.iter (fun id2 ->
+  RowDescHtbl.iter (fun id1 reachables1 ->
+    RowDescSet.iter (fun id2 ->
       if not (id1 == id2) then
-        let reachable2 = RowDescHtbl.find_opt reachable id2 in
-        let reachable2 = Option.value reachable2 ~default:[] in
-        if List.memq id1 reachable2 then
+        let reachables2 = RowDescHtbl.find_opt reachable id2 in
+        let reachables2 = Option.value reachables2 ~default:RowDescSet.empty in
+        if RowDescSet.mem id1 reachables2 then
           match RowDescHtbl.find_opt connected id1 with
-          | None -> RowDescHtbl.add connected id1 (ref [id2])
-          | Some prev -> prev :=  id2 :: !prev)
-    reachable1)
+          | None -> RowDescHtbl.add connected id1 [id2]
+          | Some prev -> RowDescHtbl.replace connected id1 (id2 :: prev))
+    reachables1)
   reachable;
-  let connected' = RowDescHtbl.create 17 in
-  RowDescHtbl.iter (fun row ref_lst -> RowDescHtbl.add connected' row !ref_lst) connected;
-  connected'
+  connected
 
-let transform_edges_ f edges connected =
-  let transformed = RowDescHtbl.create 17 in
-  RowDescHtbl.iter
-    (fun row con ->
-        if not (RowDescHtbl.mem transformed row) then begin
-          assert (not (List.memq row con));
-          let group = row :: con in
-          (* let get_edges row =
-            Option.value (RowDescHtbl.find_opt edges row) ~default:[] in
-          let group_edges = f get_edges group in *)
-          let upd = f group edges in
-          List.iter upd group;
-          List.iter (fun row -> RowDescHtbl.add transformed row ()) group
-        end)
-    connected;
-  edges
+(** transform edges to remove cycles *)
 
-let transform_edges_v =
-  transform_edges_
-    (fun group edges ->
-      let get_edges row = Option.value (RowDescHtbl.find_opt edges row) ~default:[] in
-      let new_edges = exclude_listsq (uniq (List.concat_map get_edges group)) group in
-      if new_edges = []
-      then fun row -> RowDescHtbl.remove edges row
-      else fun row -> RowDescHtbl.replace edges row new_edges)
+let select_representatives classes =
+  let get_repr = RowDescHtbl.create 17 in
+  let to_remove = 
+    RowDescHtbl.fold 
+      (fun row connected to_remove ->
+        if RowDescSet.mem row to_remove then to_remove else begin
+          List.iter (fun row' -> RowDescHtbl.add get_repr row' row) connected;
+          RowDescSet.union to_remove (RowDescSet.of_list connected)
+        end
+        ) 
+      classes RowDescSet.empty 
+  in
+  get_repr, to_remove
 
-let transform_edges_t_ub =
-  transform_edges_
-    (fun group edges ->
-      let new_edges = List.filter_map (RowDescHtbl.find_opt edges) group in
-      match new_edges with
-        | [] ->
-            fun row -> RowDescHtbl.remove edges row
-        | h :: t ->
-            let new_edges = List.fold_left merge_tags_ub h t in
-            fun row -> RowDescHtbl.replace edges row new_edges)
+let merge_classes get_repr to_remove edges =
+  RowDescSet.iter
+    (fun row -> try
+        let repr = RowDescHtbl.find get_repr row in
+        let row_edges = RowDescHtbl.find edges row in
+        let repr_edges = RowDescHtbl.find edges repr in
+        RowDescHtbl.replace edges repr (row_edges @ repr_edges);
+        RowDescHtbl.remove edges row
+    with Not_found -> assert false)
+    to_remove;
+  RowDescHtbl.filter_map_inplace
+    (fun row edges ->
+      assert (not (RowDescSet.mem row to_remove));
+      Some (List.filter (fun row' -> not (RowDescSet.mem row' to_remove)) edges))
+    edges;
+  RowDescHtbl.filter_map_inplace (fun _ edges -> Some (uniq edges)) edges
 
-let transform_edges_t_lb =
-  transform_edges_
-    (fun group edges ->
-      let new_edges = List.filter_map (RowDescHtbl.find_opt edges) group in
-      match new_edges with
-        | [] ->
-            fun row -> RowDescHtbl.remove edges row
-        | h :: t ->
-            let new_edges = List.fold_left merge_tags_lb h t in
-            if new_edges = []
-              then fun row -> RowDescHtbl.remove edges row
-              else fun row -> RowDescHtbl.replace edges row new_edges)
+let merge_classes_tags merge get_repr to_remove edges =
+  RowDescSet.iter
+    (fun row -> try
+        let repr = RowDescHtbl.find get_repr row in
+        let row_edges = RowDescHtbl.find edges row in
+        let repr_edges = RowDescHtbl.find edges repr in
+        RowDescHtbl.replace edges repr (merge row_edges repr_edges);
+        RowDescHtbl.remove edges row
+    with Not_found -> assert false)
+    to_remove
 
-let transform_edges
-  ((edges_ub_vars, edges_ub_tags), (edges_lb_vars, edges_lb_tags)) connected =
-  (transform_edges_v edges_ub_vars connected,
-   transform_edges_t_ub edges_ub_tags connected),
-  (transform_edges_v edges_lb_vars connected,
-   transform_edges_t_lb edges_lb_tags connected)
+let merge_classes_ub_tags = merge_classes_tags merge_tags_ub
+let merge_classes_lb_tags = merge_classes_tags merge_tags_lb
 
-let transform_context context connected =
-  let equal row = Option.value (RowDescHtbl.find_opt connected row) ~default:[] in
-  let new_context = List.concat @@ List.map equal context in
-  uniq @@ List.append context new_context
+let remove_cycles ((edges_ub_vars, edges_ub_tags), (edges_lb_vars, edges_lb_tags)) classes =
+  let get_repr, to_remove = select_representatives classes in
+  merge_classes get_repr to_remove edges_ub_vars;
+  merge_classes get_repr to_remove edges_lb_vars;
+  merge_classes_ub_tags get_repr to_remove edges_ub_tags;
+  merge_classes_lb_tags get_repr to_remove edges_lb_tags;
+  get_repr
+
+(* transform context according to the classes and selected representatives *)
+let transform_context get_repr context =
+  let back_map = 
+    List.to_seq context |>  
+    Seq.map (fun row -> (row, RowDescHtbl.find_opt get_repr row)) |>
+    Seq.filter_map (fun (row, repr) -> Option.map (fun repr -> (repr, row)) repr) |>
+    RowDescHtbl.of_seq
+  in
+  let new_context = 
+    uniq @@ 
+    List.map 
+      (fun row -> 
+        Option.value (RowDescHtbl.find_opt get_repr row) ~default:row) 
+      context in
+  new_context, back_map
 
 let solve_for_with_context_ solve_rec merge (edges_var, edges_tag) row =
   let vars_solution =
@@ -1066,42 +1205,28 @@ let solve_set_type_with_context_ context (edges_ub, edges_lb) (row : row_desc) =
       solution
   end
 
-let filter_edges ((e1,e2),(e3,e4)) reachable =
-  let filter htbl =
-    RowDescHtbl.filter_map_inplace
-      (fun row con ->
-        if RowDescHtbl.mem reachable row then Some con else None)
-      htbl in
-  filter e1;
-  filter e2;
-  filter e3;
-  filter e4
-
-let rec pp_context_in_ans context connected ans = 
+(* post-process context (return from representatives to original variables) *)
+let rec pp_context_in_ans context_back_map ans = 
   let remap row = 
-    if List.memq row context 
-      then row
-      else begin 
-        let conn = RowDescHtbl.find connected row in
-        List.find (fun x -> List.memq x context) conn
-      end
+    match RowDescHtbl.find_opt context_back_map row with
+    | None -> row
+    | Some row -> row
   in
-  let re = pp_context_in_ans context connected in
+  let re = pp_context_in_ans context_back_map in
   match ans with
   | (SSFail _ | SSTags _) -> ans
   | SSIntersection (l, r) -> SSIntersection (re l, re r)
   | SSUnion (l, r) -> SSUnion (re l, re r)
   | SSVariable row -> SSVariable (remap row)
 
-let solve_set_type_with_context orig_context row =
-  let edges = collect_edges () in
-  let reachable = find_reachables edges row in
-  filter_edges edges reachable;
-  let connected = find_components edges in
-  let edges = transform_edges edges connected in
-  let context = transform_context orig_context connected in
+let solve_set_type_with_context context row =
+  let group = get_polyvariant_group row in
+  let edges = collect_edges group in
+  let classes = find_classes edges in
+  let get_repr = remove_cycles edges classes in
+  let context, context_back_map = transform_context get_repr context in
   let ans = solve_set_type_with_context_ context edges row in
-  let ans = pp_context_in_ans orig_context connected ans in
+  let ans = pp_context_in_ans context_back_map ans in
   ans
 
 (* romanv: Could be solved much faster in case of empty context *)
@@ -1116,12 +1241,41 @@ let solve_set_type row =
   | SSFail _ -> None
   | _ -> assert false
 
+let ub_edges_closure (edges, _) =
+  let reachable = TyHtbl.create 17 in
+  let rec calc_reachable visited id =
+    if TySet.mem id visited then visited else begin
+    let visited = TySet.add id visited in
+    match TyHtbl.find_opt edges id with
+    | None -> visited
+    | Some direct -> List.fold_left (fun visited id -> calc_reachable visited id) visited direct
+    end
+  in
+  TyHtbl.iter
+    (fun id _ ->      
+      TyHtbl.add reachable id (calc_reachable (TySet.empty) id))
+    edges;
+  reachable
+
+let solve_vars vars =
+  let group = 
+    List.to_seq vars |> 
+    Seq.map get_variable_group |>
+    Seq.fold_left TySet.union TySet.empty in
+  let edges = collect_variables_edges group in
+  let ub_edges_closure = ub_edges_closure edges in
+  let vars_set = TySet.of_list vars in
+  List.to_seq vars |>
+  Seq.map (fun v -> v, TyHtbl.find_opt ub_edges_closure v) |>
+  Seq.filter_map (fun (v, oub) -> Option.map (fun ub -> v, ub) oub) |>
+  Seq.map (fun (v, ub) -> v, TySet.inter vars_set ub)
+
 let cp_rows (rows : (row_desc * row_desc) list) : unit =
   List.iter
     (fun (from_row, to_row) ->
       let (_, from_id) = from_row.debug_info in
       let (_, to_id) = to_row.debug_info in
-      Printf.fprintf dump "COPY: %d -> %d\n" from_id to_id)
+      Printf.fprintf dump "COPY R: %d -> %d\n" from_id to_id)
     rows;
   let context = List.map fst rows in
   let solve (from, _to) =
@@ -1150,6 +1304,32 @@ let cp_rows (rows : (row_desc * row_desc) list) : unit =
     | _ -> assert false
   in
   List.iter2 cp_constraints rows solutions
+
+let cp_rows rows =
+  if List.length rows = 0 then () else cp_rows rows
+
+let cp_vars (vars : (type_expr * type_expr) list) : unit =
+  List.iter
+    (fun (from_v, to_v) ->
+      Printf.fprintf dump "COPY V: %s -> %s\n" (sprint_ty from_v) (sprint_ty to_v))
+    vars;
+
+  let copies = List.map snd vars in
+  let not_var_copies = List.filter (fun ty -> not @@ is_var ty) copies in
+  let redirect_descs = List.map (fun ty -> ty, ty.desc) not_var_copies in
+  List.iter (fun ty -> ty.desc <- Tvar None) not_var_copies;
+
+  let copied = List.map fst vars in
+  let remap v = List.assq v vars in
+  solve_vars copied |>
+  Seq.map (fun (v, ub) -> v, TySet.to_seq ub) |>
+  Seq.map (fun (v, ub) -> remap v, Seq.map remap ub) |>
+  Seq.iter (fun (v, ub) -> Seq.iter (add_variables_constraint Right v) ub);
+
+  List.iter (fun (ty, desc) -> Transient_expr.set_desc ty desc) redirect_descs
+
+let cp_vars vars = 
+  if List.length vars < 2 then () else cp_vars vars
 
 let cur_id = ref 0
 let new_id () = cur_id := !cur_id + 1; !cur_id
@@ -1262,8 +1442,8 @@ let dump_link ty ty' =
   if Sys.file_exists "/dump_link" then
   Printf.fprintf dump 
     "link_type: %s - %s\n" 
-    (sprint_desc ty.desc) 
-    (sprint_desc ty'.desc)
+    (sprint_ty ty) 
+    (sprint_ty ty')
 
 let log_type ty =
   if ty.id <= !last_snapshot then log_change (Ctype (ty, ty.desc))

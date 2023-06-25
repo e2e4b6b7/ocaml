@@ -723,6 +723,30 @@ and signature_components  ~in_eq ~loc old_env ~mark env subst
       let id, item, shape_map, present_at_runtime =
         match sigi1, sigi2 with
         | Sig_value(id1, valdecl1, _) ,Sig_value(_id2, valdecl2, _) ->
+            if (Ident.name id1) = "setup" then begin
+              let sprint_desc = function
+                | Tarrow _ -> "Tarrow"
+                | Tvariant _ -> "Tvariant"
+                | Tvar (Some n) -> Printf.sprintf "Tvar %s" n
+                | Tvar None -> "Tvar _"
+                | Tunivar _ -> "Tunivar"
+                | Tconstr _ -> "Tconstr"
+                | Tfield _ -> "Tfield"
+                | Tlink _ -> "Tlink"
+                | Tobject _ -> "Tobject"
+                | Tpackage _ -> "Tpackage"
+                | Tnil -> "Tnil"
+                | Ttuple _ -> "Ttuple"
+                | Tpoly _ -> "Tpoly"
+                | Tsubst _ -> "Tsubst" in
+              Printf.printf "rerere";
+              Printf.printf "scope1: %d\n" (get_scope valdecl1.val_type);
+              Printf.printf "scope2: %d\n" (get_scope valdecl2.val_type);
+              Printf.printf "id1: %d\n" (get_id valdecl1.val_type);
+              Printf.printf "id2: %d\n" (get_id valdecl2.val_type);
+              Printf.printf "desc1: %s\n" (sprint_desc @@ get_desc valdecl1.val_type);
+              Printf.printf "desc2: %s\n" (sprint_desc @@ get_desc valdecl2.val_type);
+            end;
             let item =
               value_descriptions ~loc env ~mark subst id1 valdecl1 valdecl2
             in

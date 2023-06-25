@@ -40,13 +40,18 @@ exception Error of Location.t * error
 let get_variance ty visited =
   try TypeMap.find ty !visited with Not_found -> Variance.null
 
+(** romanv: have to be fixed according to in-group relations *)
+let set_variance ty vari visited =
+  let tys = variable_group ty in
+  Seq.fold_left (fun visited ty -> TypeMap.add ty vari visited) !visited tys
+
 let compute_variance env visited vari ty =
   let rec compute_variance_rec vari ty =
     (* Format.eprintf "%a: %x@." Printtyp.type_expr ty (Obj.magic vari); *)
     let vari' = get_variance ty visited in
     if Variance.subset vari vari' then () else
     let vari = Variance.union vari vari' in
-    visited := TypeMap.add ty vari !visited;
+    visited := set_variance ty vari visited;
     let compute_same = compute_variance_rec vari in
     match get_desc ty with
       Tarrow (_, ty1, ty2, _) ->

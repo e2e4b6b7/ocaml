@@ -252,6 +252,12 @@ and transl_type_aux env policy styp =
                                         List.length stl)));
       let args = List.map (transl_type env policy) stl in
       let params = instance_list decl.type_params in
+      (* Printf.printf "Args\n";
+      List.iter (fun a -> Printtyp.raw_type_expr Format.std_formatter a.ctyp_type; Format.pp_print_newline Format.std_formatter ()) args;
+      Printf.printf "Params\n";
+      List.iter (fun p -> Printtyp.raw_type_expr Format.std_formatter p; Format.pp_print_newline Format.std_formatter ()) params;
+      Printf.printf "No inst params\n";
+      List.iter (fun p -> Printtyp.raw_type_expr Format.std_formatter p; Format.pp_print_newline Format.std_formatter ()) decl.type_params; *)
       let unify_param =
         match decl.type_manifest with
           None -> unify_var
@@ -477,6 +483,7 @@ and transl_type_aux env policy styp =
       let new_univars = make_poly_univars vars in
       let old_univars = !univars in
       univars := new_univars @ !univars;
+      (* Printast.core_type 0 Format.std_formatter st; *)
       let cty = transl_type env policy st in
       let ty = cty.ctyp_type in
       univars := old_univars;

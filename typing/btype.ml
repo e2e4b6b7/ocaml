@@ -427,6 +427,8 @@ module For_copy : sig
   val register_row_copy: copy_scope -> row_desc -> row_desc -> unit
   val register_copied_kind: copy_scope -> row_kind_id -> row_kind_class -> unit
 
+  val register_var_copy: copy_scope -> type_expr -> type_expr -> unit
+
   val with_scope: (copy_scope -> 'a) -> 'a
 end = struct
   type copy_scope = {
@@ -435,6 +437,7 @@ end = struct
     mutable copied_rows : (row_desc * row_desc) list;
     (** Pairs of copied types of polymorphic variants. (from, to) *)
     mutable copied_kinds : (row_kind_id * row_kind_class) list;
+    mutable copied_vars : (type_expr * type_expr) list;
   }
 
   let get_copied_kind copy_scope id = List.assq_opt id copy_scope.copied_kinds
@@ -450,17 +453,23 @@ end = struct
   let register_row_copy copy_scope from to_ =
     copy_scope.copied_rows <- (from, to_) :: copy_scope.copied_rows
 
+  let register_var_copy copy_scope from to_ =
+    copy_scope.copied_vars <- (from, to_) :: copy_scope.copied_vars
+
   (* Restore type descriptions. *)
   let cleanup { saved_desc; _ } =
     List.iter (fun (ty, desc) -> Transient_expr.set_desc ty desc) saved_desc
 
   let copy_row_constraints { copied_rows; _ } = cp_rows copied_rows
 
+  let copy_var_constraints { copied_vars; _ } = cp_vars copied_vars
+
   let with_scope f =
-    let scope = { saved_desc = []; copied_rows = []; copied_kinds = [] } in
+    let scope = { saved_desc = []; copied_rows = []; copied_kinds = []; copied_vars = [] } in
     let res = f scope in
     cleanup scope;
     copy_row_constraints scope;
+    copy_var_constraints scope;
     res
 end
 

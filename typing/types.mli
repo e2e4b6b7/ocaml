@@ -223,6 +223,9 @@ val get_level: type_expr -> int
 val get_scope: type_expr -> int
 val get_id: type_expr -> int
 
+val sprint_ty: type_expr -> string
+val sprint_desc: type_desc -> string
+
 (** Transient [type_expr].
     Should only be used immediately after [Transient_expr.repr] *)
 type transient_expr = private
@@ -324,6 +327,7 @@ type row_kind_id
 type row_kind_class
 
 val cp_rows: (row_desc * row_desc) list -> unit
+val cp_vars: (type_expr * type_expr) list -> unit
 
 val sprint_row: row_desc -> string
 
@@ -376,6 +380,8 @@ type row_desc_repr =
              name:   (Path.t * type_expr list) option }
 
 val row_repr: row_desc -> row_desc_repr
+
+val variable_group: type_expr -> type_expr Seq.t
 
 module Uid = Shape.Uid
 

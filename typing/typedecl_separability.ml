@@ -100,14 +100,10 @@ let compose
   | Sep -> m2
   | Ind -> Ind
 
-type type_var = {
-  text: string option; (** the user name of the type variable, None for '_' *)
-  id: int; (** the identifier of the type node (type_expr.id) of the variable *)
-}
 
 module TVarMap = Map.Make(struct
-    type t = type_var
-    let compare v1 v2 = compare v1.id v2.id
+    type t = type_expr
+    let compare v1 v2 = compare (get_id v1) (get_id v2)
   end)
 type context = mode TVarMap.t
 let (++) = TVarMap.union (fun _ m1 m2 -> Some(max_mode m1 m2))
@@ -178,7 +174,7 @@ let free_variables ty =
   Ctype.free_variables ty
   |> List.map (fun ty ->
       match get_desc ty with
-        Tvar text -> {text; id = get_id ty}
+        Tvar _ -> ty
       | _ ->
           (* Ctype.free_variables only returns Tvar nodes *)
           assert false)
@@ -392,8 +388,8 @@ let check_type
     (* "Indifferent" case, the empty context is sufficient. *)
     | (_                  , Ind    ) -> empty
     (* Variable case, add constraint. *)
-    | (Tvar(alpha)        , m      ) ->
-        TVarMap.singleton {text = alpha; id = get_id ty} m
+    | (Tvar _             , m      ) ->
+        TVarMap.singleton ty m
     (* "Separable" case for constructors with known memory representation. *)
     | (Tarrow _           , Sep    )
     | (Ttuple _           , Sep    )
@@ -524,14 +520,15 @@ let msig_of_context : decl_loc:Location.t -> parameters:type_expr list
       let get context var =
         try TVarMap.find var context with Not_found -> Ind in
       let set_ind context var =
-        TVarMap.add var Ind context in
+        Seq.fold_left 
+          (fun context var -> TVarMap.add var Ind context) 
+          context (variable_group var) in
       let is_ind context var = match get context var with
         | Ind -> true
         | Sep | Deepsep -> false in
       match get_desc param_instance with
-      | Tvar text ->
-          let var = {text; id = get_id param_instance} in
-          (get context var) :: acc, (set_ind context var)
+      | Tvar _ ->
+          (get context param_instance) :: acc, (set_ind context param_instance)
       | _ ->
           let instance_exis = free_variables param_instance in
           if List.for_all (is_ind context) instance_exis then
@@ -581,9 +578,12 @@ let msig_of_context : decl_loc:Location.t -> parameters:type_expr list
     (* After all variables determined by the parameters have been set to Ind
        by [handle_equation], all variables remaining in the context are
        purely existential and should not require a stronger mode than Ind. *)
+    let get_name var = match get_desc var with
+      | Tvar name -> name
+      | _ -> assert false in
     let check_existential evar mode =
       if rank mode > rank Ind then
-        raise (Error (decl_loc, Non_separable_evar evar.text))
+        raise (Error (decl_loc, Non_separable_evar (get_name evar)))
     in
     TVarMap.iter check_existential context;
     mode_signature

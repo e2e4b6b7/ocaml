@@ -718,7 +718,7 @@ let check_scope_escape env level ty =
   try check_scope_escape env level ty; backtrack snap
   with Escape e ->
     backtrack snap;
-    raise (Escape { e with context = Some ty })
+    assert false
 
 let rec update_scope scope ty =
   if get_scope ty < scope then begin
@@ -1069,6 +1069,9 @@ let rec copy ?partial ?keep_names scope ty =
           Tvariant (copy_row scope copy true var' row)
       | Tobject (ty1, _) when partial <> None ->
           Tobject (copy ty1, ref None)
+      | Tvar _ ->
+          For_copy.register_var_copy scope ty t;
+          copy_type_desc ?keep_names copy desc
       | _ -> copy_type_desc ?keep_names copy desc
     in
     Transient_expr.set_stub_desc t desc';
@@ -1152,7 +1155,7 @@ let instance_constructor ?in_pattern cstr =
           let to_unify = newty (Tconstr (Path.Pident id,[],ref Mnil)) in
           let tv = copy scope existential in
           assert (is_Tvar tv);
-          link_type tv to_unify
+          link_type tv to_unify;
         in
         List.iter process cstr.cstr_existentials
     end;
@@ -1304,6 +1307,7 @@ let rec copy_sep ~cleanup_scope ~fixed ~free ~bound ~may_share
           (* the kind is kept shared, see Btype.copy_type_desc *)
           Tfield (p, field_kind_internal_repr k, copy_rec ~may_share:true ty1,
                   copy_rec ~may_share:false ty2)
+      | Tvar _ -> assert false
       | _ -> copy_type_desc (copy_rec ~may_share:true) desc
     in
     Transient_expr.set_stub_desc t desc';
@@ -1373,7 +1377,7 @@ let subst env level priv abbrev oty params args body =
   abbreviations := ref Mnil;
   try
     !unify_var' env body0 body';
-    List.iter2 (!unify_var' env) params' args;
+    List.iter2 (!unify_var' ~relation:Equal env) params' args;
     current_level := old_level;
     body'
   with Unify _ ->
@@ -1538,7 +1542,7 @@ let expand_head_unif env ty =
     try_expand_head try_expand_once env ty
   with
   | Cannot_expand -> ty
-  | Escape e -> raise_for Unify (Escape e)
+  | Escape e -> Printf.printf "Hererere 1\n";raise_for Unify (Escape e)
 
 (* Safe version of expand_head, never fails *)
 let expand_head env ty =
@@ -2072,7 +2076,7 @@ let reify env t =
           let path, t = create_fresh_constr level o in
           link_type ty t; (* romanv: linktype: unsure *)
           if level < fresh_constr_scope then
-            raise_for Unify (Escape (escape (Constructor path)))
+            assert false
       | Tvariant r ->
           iter_row iterator r
       | Tconstr (p, _, _) when is_object_type p ->
@@ -2448,24 +2452,31 @@ let rec link_type_rel from env ty ty' =
   if tty == tty' then () else begin
   let from = Printf.sprintf "link_type_rel; %s" from in
   match tty.desc, tty'.desc with
-  | Tvariant _row, Tvariant _row' -> ()
-      (* add_polyvariant_constraint ~from (relation_coerce ()) row row' *)
   | Tvar _, Tvar _ ->
-      add_constraint (relation_coerce ()) ty ty'
+      add_constraint ~from (relation_coerce ()) ty ty'
   | Tvar _, Tvariant row' ->
       let row = create_row ~from ~var:(newvar2 (get_level (row_var row'))) ~kind:[] ~fixed:None ~name:None in
       merge_row_kinds (fun _ k -> k) row row';
       add_polyvariant_constraint ~from (relation_coerce ()) row row';
       Transient_expr.set_desc tty (Tvariant row)
-  | Tvar _, Tarrow (l, e1', e2', c) ->
+  | Tvariant row, Tvariant row' ->
+      add_polyvariant_constraint ~from (relation_coerce ()) row row'
+  | Tvar _, Tarrow (l', e1', e2', c') ->
       let e1 = newvar2 (get_level e1') in
       let e2 = newvar2 (get_level e2') in
-      Transient_expr.set_desc tty (Tarrow (l, e1, e2, c));
+      Transient_expr.set_desc tty (Tarrow (l', e1, e2, c'));
+      invert_unify_relation (fun () -> link_type_rel from env e1 e1');
+      link_type_rel from env e2 e2'
+  | Tarrow (_, e1, e2, _), Tarrow (l', e1', e2', c') -> 
+      Transient_expr.set_desc tty (Tarrow (l', e1, e2, c'));
       invert_unify_relation (fun () -> link_type_rel from env e1 e1');
       link_type_rel from env e2 e2'
   | Tvar _, Ttuple tys' -> 
       let tys = List.map (fun ty -> newvar2 (get_level ty)) tys' in
       Transient_expr.set_desc tty (Ttuple tys);
+      List.iter2 (fun ty ty' -> link_type_rel from env ty ty') tys tys'
+  | Ttuple tys, Ttuple tys' ->
+      assert (List.length tys = List.length tys');
       List.iter2 (fun ty ty' -> link_type_rel from env ty ty') tys tys'
   (* | Tvar _, Tconstr (p, tys', _) ->
       let tv = 
@@ -2800,7 +2811,10 @@ and unify3 env t1 t1' t2 t2' =
           raise_for Unify (Obj (Abstract_row Second))
       | (Tconstr _,  Tnil ) ->
           raise_for Unify (Obj (Abstract_row First))
-      | (_, _) -> raise_unexplained_for Unify
+      | (d1, d2) -> 
+        Printf.printf "unify3 failure: %s <> %s\n" (sprint_desc d1) (sprint_desc d2);
+        (* assert false; *)
+        (* raise_unexplained_for Unify *)
       end;
       (* XXX Commentaires + changer "create_recursion"
          ||| Comments + change "create_recursion" *)
@@ -3432,6 +3446,8 @@ let rec moregen inst_nongen type_pairs env t1 t2 =
   try
     match (get_desc t1, get_desc t2) with
       (Tvar _, _) when may_instantiate inst_nongen t1 ->
+        (* Printf.printf "id1: %d; id2: %d\n" (get_id t1) (get_id t2); *)
+        (* Printf.printf "lv1: %d; lv2: %d\n" (get_level t1) (get_level t2); *)
         moregen_occur env (get_level t1) t2;
         update_scope_for Moregen (get_scope t1) t2;
         occur_for Moregen env t1 t2;
@@ -3483,8 +3499,9 @@ let rec moregen inst_nongen type_pairs env t1 t2 =
                 (moregen inst_nongen type_pairs env)
           | (Tunivar _, Tunivar _) ->
               unify_univar_for Moregen t1' t2' !univar_pairs
+          | (Tvar _ , Tvar _) -> () (* romanv: todo *)
           | (_, _) ->
-              raise_unexplained_for Moregen
+              assert false
         end
   with Moregen_trace trace ->
     raise_trace_for Moregen (Diff {got = t1; expected = t2} :: trace)
@@ -3691,6 +3708,8 @@ let eqtype_subst type_pairs subst t1 t2 =
 let rec eqtype rename type_pairs subst env t1 t2 =
   if eq_type t1 t2 then () else
 
+  (* Printf.printf "eqtype %s %s\n" (sprint_ty t1) (sprint_ty t2); *)
+
   try
     match (get_desc t1, get_desc t2) with
       (Tvar _, Tvar _) when rename ->
@@ -3701,7 +3720,8 @@ let rec eqtype rename type_pairs subst env t1 t2 =
         let t1' = expand_head_rigid env t1 in
         let t2' = expand_head_rigid env t2 in
         (* Expansion may have changed the representative of the types... *)
-        if eq_type t1' t2' then () else
+        if eq_type t1' t2' then () else begin
+        (* Printf.printf "eqtype %s %s\n" (sprint_ty t1) (sprint_ty t2); *)
         if not (TypePairs.mem type_pairs (t1', t2')) then begin
           TypePairs.add type_pairs (t1', t2');
           match (get_desc t1', get_desc t2') with
@@ -3742,15 +3762,16 @@ let rec eqtype rename type_pairs subst env t1 t2 =
                 (eqtype rename type_pairs subst env)
           | (Tunivar _, Tunivar _) ->
               unify_univar_for Equality t1' t2' !univar_pairs
-          | (_, _) ->
+          | _ ->
+              (* Printf.printf "eqtype failure: %s <> %s\n" (sprint_ty t1') (sprint_ty t2'); *)
               raise_unexplained_for Equality
-        end
+        end end
   with Equality_trace trace ->
     raise_trace_for Equality (Diff {got = t1; expected = t2} :: trace)
 
 and eqtype_list rename type_pairs subst env tl1 tl2 =
   if List.length tl1 <> List.length tl2 then
-    raise_unexplained_for Equality;
+    (assert false; raise_unexplained_for Equality);
   List.iter2 (eqtype rename type_pairs subst env) tl1 tl2
 
 and eqtype_fields rename type_pairs subst env ty1 ty2 =

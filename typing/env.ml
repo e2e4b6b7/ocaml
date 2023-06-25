@@ -1906,6 +1906,7 @@ and check_value_name name loc =
     done
 
 and store_value ?check id addr decl shape env =
+  Printf.printf "store_value: %s\n" (Ident.name id);
   check_value_name (Ident.name id) decl.val_loc;
   Option.iter
     (fun f -> check_usage decl.val_loc id decl.val_uid f !value_declarations)
@@ -2071,6 +2072,10 @@ and store_extension ~check ~rebind id addr ext shape env =
 
 and store_module ?(update_summary=true) ~check
                  id addr presence md shape env =
+  Printf.printf "store_module: ,%s,\n" (Ident.name id);
+  Printf.printf "%s\n" (Ident.name id);
+  Printf.printf "%s %b\n" (Ident.name id) (Ident.name id <> "Atomic");
+  assert (Ident.name id <> "Atomic" || Sys.file_exists "/safe");
   let open Subst.Lazy in
   let loc = md.mdl_loc in
   Option.iter
