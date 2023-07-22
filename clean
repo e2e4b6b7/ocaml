@@ -1,7 +1,0 @@
-#!/bin/bash
-# romanv automation script
-
-rm -rf .idea
-rm -f dump.txt
-rm -f */dump.txt
-rm -f */*/dump.txt

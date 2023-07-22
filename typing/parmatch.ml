@@ -231,6 +231,7 @@ let first_column simplified_matrix =
 *)
 
 
+(* set-theoretic: todo: review and remove *)
 let is_absent _tag _row = false
 
 let is_absent_pat d =
@@ -729,7 +730,7 @@ let full_match closing env =  match env with
   | Any -> assert false
   | Construct { cstr_tag = Cstr_extension _ ; _ } -> false
   | Construct c -> List.length env = c.cstr_consts + c.cstr_nonconsts
-  | Variant { type_row; _ } -> begin
+  | Variant { type_row; _ } ->
       let pat_fields =
         List.map
           (fun (d, _) ->
@@ -739,13 +740,12 @@ let full_match closing env =  match env with
           env
       in
       let row = type_row () in
-      (* Printf.printf "%s\n" (sprint_row row); *)
       if closing then
         (* closing=true, we are considering the variant as closed *)
         List.for_all
           (fun (tag, _) -> List.mem tag pat_fields)
           (row_fields_lb row)
-      else
+      else begin
         match row_fields_ub row with
         | None -> false
         | Some fields ->
@@ -886,7 +886,7 @@ let build_other_constant proj make first next p env =
 
 let some_private_tag = "<some private tag>"
 
-let _build_other ext env =
+let build_other ext env =
   match env with
   | [] -> omega
   | (d, _) :: _ ->
@@ -1325,13 +1325,11 @@ and specialize_and_exhaust ext pss n =
             Seq.map (set_args p) sub_witnesses
         in
         let try_omega () =
-          let tmp = full_match false constrs in
-          (* Printf.printf "specialize_and_exhaust: try_omega %b\n" tmp; *)
-          if tmp && not (_should_extend ext constrs) then
+          if full_match false constrs && not (should_extend ext constrs) then
             Seq.empty
           else
             let sub_witnesses = exhaust ext default (n-1) in
-            match _build_other ext constrs with
+            match build_other ext constrs with
             | exception Empty ->
                 (* cannot occur, since constructors don't make
                    a full signature *)
@@ -1417,7 +1415,7 @@ let rec pressure_variants tdefs = function
                   let row = type_row () in
                   if Btype.has_fixed_explanation row
                   || pressure_variants None default then ()
-                  else begin
+                  else
                     let fields =
                       List.map
                         (fun (d, _) ->
@@ -1427,7 +1425,6 @@ let rec pressure_variants tdefs = function
                         constrs
                     in
                     add_polyvariant_tags_constrint Right row fields
-                  end
                 | _ -> ()
               end;
               ok

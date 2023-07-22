@@ -174,13 +174,12 @@ module For_copy : sig
   val with_scope: (copy_scope -> 'a) -> 'a
         (* [with_scope f] calls [f] and restores saved type descriptions
            before returning its result. *)
-  
+
   val register_var_copy: copy_scope -> type_expr -> type_expr -> unit
 end
 
 val copy_row:
   For_copy.copy_scope -> (type_expr -> type_expr) -> bool -> type_expr -> row_desc -> row_desc
-
 
 val lowest_level: int
         (* Marked type: ty.level < lowest_level *)

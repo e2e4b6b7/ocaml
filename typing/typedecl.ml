@@ -175,6 +175,7 @@ let set_private_row env loc p decl =
   let rv =
     match get_desc tm with
       Tvariant _row ->
+        (* set-theoretic: todo: implement *)
         assert false
     | Tobject (ty, _) ->
         let r = snd (Ctype.flatten_fields ty) in

@@ -230,7 +230,8 @@ val unify_gadt:
         (* Unify the two types given and update the environment with the
            local constraints. Raise [Unify] if not possible.
            Returns the pairs of types that have been equated.  *)
-val unify_var: ?relation:unify_relation -> 
+val unify_var:
+        ?relation:unify_relation ->
         Env.t -> type_expr -> type_expr -> unit
         (* Same as [unify], but allow free univars when first type
            is a variable. *)

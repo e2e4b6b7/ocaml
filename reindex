@@ -1,7 +1,0 @@
-#!/bin/bash
-# romanv automation script
-
-make partialclean > /dev/null || exit
-dune build @libs || exit
-
-make -j 7

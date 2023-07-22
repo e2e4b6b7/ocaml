@@ -44,9 +44,9 @@ and type_desc =
 
 and constraint_relation = Left | Right | Equal | Unknown
 
-and 'a dsf =
-  | DsfLink of 'a dsf ref
-  | DsfValue of 'a
+and 'a dsu =
+  | DsuLink of 'a dsu ref
+  | DsuValue of 'a
 
 and 'a tail_list =
   | TLCons of 'a list * 'a tail_list ref
@@ -55,13 +55,33 @@ and 'a tail_list =
 and row_kind = (label * type_expr option) tail_list
 
 and row_desc =
-    { row_kind: row_kind dsf;
+    { row_kind: row_kind dsu;
       row_fixed: fixed_explanation option;
       row_name: (Path.t * type_expr list) option;
       row_var: type_expr;
       debug_info: (string (* from *) * int (* debug id *)) }
 and fixed_explanation =
   | Univar of type_expr | Fixed_private | Reified of Path.t | Rigid
+
+and row_kind_list = (label * type_expr option) list
+and row_kind_id = row_kind dsu ref
+and row_kind_class = row_kind dsu
+
+and set_solution =
+  | SSUnion of set_solution * set_solution
+  | SSIntersection of set_solution * set_solution
+  | SSVariable of row_desc
+  | SSTags of
+      string list option * (* lb *)
+      string list option   (* ub *)
+  | SSFail of
+      string list option * (* lb *)
+      string list option   (* ub *)
+
+and set_bound_solution = {
+  tags: string list option;
+  variables: row_desc list;
+}
 
 and abbrev_memo =
     Mnil
@@ -451,6 +471,7 @@ let signature_item_id = function
 
 (**** Definitions for backtracking ****)
 
+(* set-theoretic: todo: backtracking support for constraints *)
 type change =
     Ctype of type_expr * type_desc
   | Ccompress of type_expr * type_desc * type_desc
@@ -508,6 +529,7 @@ let commu_var () = Cvar {commu=Cunknown}
 
 (** Utils *)
 
+(* set-theoretic: todo: dunmping constraints. Have to be removed later *)
 let dump =
   let dump = open_out_gen [Open_append; Open_creat] 0o666 "dump.txt" in
   Printf.fprintf dump "\n-- New env --\n\n";
@@ -533,33 +555,65 @@ let rec is_var ty =
 
 (* dsf interface *)
 
-let dsf_init v = DsfLink (ref (DsfValue v))
+let dsu_init v = DsuLink (ref (DsuValue v))
 
-let rec dsf_get dsf =
-  match dsf with
-  | DsfLink dsf -> dsf_get !dsf
-  | DsfValue v -> v
+let rec dsu_get dsu =
+  match dsu with
+  | DsuLink dsf -> dsu_get !dsf
+  | DsuValue v -> v
 
-let rec dsf_last_link dsf =
-  match dsf with
-  | DsfLink v_ref -> begin
+let rec dsu_last_link dsu =
+  match dsu with
+  | DsuLink v_ref -> begin
       match !v_ref with
-      | DsfLink _ as dsf -> dsf_last_link dsf
-      | DsfValue v -> v, v_ref
+      | DsuLink _ as dsf -> dsu_last_link dsf
+      | DsuValue v -> v, v_ref
     end
-  | DsfValue _ -> assert false
+  | DsuValue _ -> assert false
 
-let dsf_merge f dsf dsf' =
-  let v, v_ref = dsf_last_link dsf in
-  let v', v_ref' = dsf_last_link dsf' in
+let dsu_merge f dsu dsu' =
+  let v, v_ref = dsu_last_link dsu in
+  let v', v_ref' = dsu_last_link dsu' in
   if v_ref == v_ref' then () else
   let v = f v v' in
-  let dsf_v = ref (DsfValue v) in
-  v_ref := DsfLink dsf_v;
-  v_ref' := DsfLink dsf_v;
-  assert (dsf_get dsf == dsf_get dsf')
+  let dsf_v = ref (DsuValue v) in
+  v_ref := DsuLink dsf_v;
+  v_ref' := DsuLink dsf_v;
+  assert (dsu_get dsu == dsu_get dsu')
 
-(*** Global subtyping constraints ***)
+(* tail list interface *)
+
+let tl_init l = TLCons (l, ref TLNil)
+
+let tl_flatten tl =
+  let rec collect tl =
+    match tl with
+    | TLCons (l, ls) -> l :: collect !ls
+    | TLNil -> []
+  in
+  List.flatten @@ List.rev @@ collect tl
+
+let tl_merge_append tl1 l1 tl2 l2 =
+  let rec last_ref tl =
+    match tl with
+    | TLCons (_, tlr') -> begin
+        match !tlr' with
+        | TLCons _ as tlr -> last_ref tlr
+        | TLNil -> tlr'
+      end
+    | TLNil -> assert false
+  in
+  let lr1 = last_ref tl1 in
+  let lr2 = last_ref tl2 in
+  let ref_nil = ref TLNil in
+  lr1 := TLCons (l1, ref_nil);
+  lr2 := TLCons (l2, ref_nil)
+
+(* kind interface *)
+
+let kind_get k = tl_flatten @@ dsu_get k
+
+(** Specialized collections *)
 
 module RowDescHtbl = Hashtbl.Make(struct
   type t = row_desc
@@ -585,6 +639,8 @@ module TySet = Set.Make(struct
   let compare ty1 ty2 = ty1.id - ty2.id
 end)
 
+(*** Global subtyping constraints ***)
+
 let polyvariants_tag_ub_constraints : (row_desc * label list) list ref = ref []
 let polyvariants_tag_lb_constraints : (row_desc * label list) list ref = ref []
 let polyvariants_constraints : (row_desc * row_desc) list ref = ref []
@@ -598,38 +654,38 @@ let variables_constraints_groups = TyHtbl.create 17
 let add_constraint relation v1 v2 constraints =
   let add_deduplicated constraints ((l, r) as constr) =
     if not @@ List.exists (fun (l', r') -> l' == l && r' == r) !constraints
-      then constraints := constr :: !constraints 
+      then constraints := constr :: !constraints
   in
   let add = add_deduplicated constraints in
   match relation with
   | Right -> add (v1, v2)
   | Left -> add (v2, v1)
-  | Equal | Unknown -> add (v1, v2); add (v2, v1) 
+  | Equal | Unknown -> add (v1, v2); add (v2, v1)
 
 let add_variables_constraint relation v1 v2 =
   assert (is_var v1 && is_var v2);
   let ensure v =
     match TyHtbl.find_opt variables_constraints_groups v with
     | Some dsf -> dsf
-    | None -> 
-        let dsf = dsf_init (TySet.singleton v) in
+    | None ->
+        let dsf = dsu_init (TySet.singleton v) in
         TyHtbl.add variables_constraints_groups v dsf;
         dsf
   in
   add_constraint relation v1 v2 variables_constraints;
-  dsf_merge TySet.union (ensure v1) (ensure v2)
+  dsu_merge TySet.union (ensure v1) (ensure v2)
 
 let add_polyvariants_constraints relation row1 row2 =
   let ensure row =
     match RowDescHtbl.find_opt polyvariants_constraints_groups row with
     | Some dsf -> dsf
-    | None -> 
-        let dsf = dsf_init (RowDescSet.singleton row) in
+    | None ->
+        let dsf = dsu_init (RowDescSet.singleton row) in
         RowDescHtbl.add polyvariants_constraints_groups row dsf;
         dsf
   in
   add_constraint relation row1 row2 polyvariants_constraints;
-  dsf_merge RowDescSet.union (ensure row1) (ensure row2)
+  dsu_merge RowDescSet.union (ensure row1) (ensure row2)
 
 (** Constraints utils *)
 
@@ -638,16 +694,16 @@ let is_constrained ty =
 
 let get_variable_group ty =
   match TyHtbl.find_opt variables_constraints_groups ty with
-  | Some g -> dsf_get g
+  | Some g -> dsu_get g
   | None -> TySet.singleton ty
-
-let get_polyvariant_group ty =
-  match RowDescHtbl.find_opt polyvariants_constraints_groups ty with
-  | Some g -> dsf_get g
-  | None -> RowDescSet.singleton ty
 
 let variable_group ty =
   get_variable_group ty |> TySet.to_seq
+
+let get_polyvariant_group row =
+  match RowDescHtbl.find_opt polyvariants_constraints_groups row with
+  | Some g -> dsu_get g
+  | None -> RowDescSet.singleton row
 
 (** Collection of constraints edges *)
 
@@ -657,16 +713,16 @@ let collect_tag_edges group constraints merge =
     (fun (row, tags) ->
       if RowDescSet.mem row group then
         match RowDescHtbl.find_opt edges_tag row with
-        | None -> 
+        | None ->
             RowDescHtbl.add edges_tag row tags
-        | Some tags' -> 
+        | Some tags' ->
             RowDescHtbl.replace edges_tag row (merge tags tags'))
     constraints;
   RowDescHtbl.filter_map_inplace
-    (fun _ tags -> Some (uniq tags)) (* romanv: may be redundant *)
+    (fun _ tags -> Some (uniq tags))
     edges_tag;
   edges_tag
-  
+
 let merge_tags_ub = intersect_lists
 let collect_tag_ub_edges group =
   collect_tag_edges group !polyvariants_tag_ub_constraints merge_tags_ub
@@ -693,14 +749,22 @@ let collect_polyvariants_edges group =
     constraints;
   edges_ub, edges_lb
 
-let collect_variables_edges group = 
+(** edges = ((edges_var_ub, edges_tag_ub), (edges_var_lb, edges_tag_lb)) *)
+
+let collect_edges group =
+  let (edges_var_ub, edges_var_lb) = collect_polyvariants_edges group in
+  let edges_tag_ub = collect_tag_ub_edges group in
+  let edges_tag_lb = collect_tag_lb_edges group in
+  ((edges_var_ub, edges_tag_ub), (edges_var_lb, edges_tag_lb))
+
+let collect_variables_edges group =
   let constraints = !variables_constraints in
   let edges_ub = TyHtbl.create 13 in
   let edges_lb = TyHtbl.create 13 in
-  let add_constraint htbl row1 row2 =
-    match TyHtbl.find_opt htbl row1 with
-    | None -> TyHtbl.add htbl row1 [row2]
-    | Some rows -> TyHtbl.replace htbl row1 (row2 :: rows) in
+  let add_constraint htbl v1 v2 =
+    match TyHtbl.find_opt htbl v1 with
+    | None -> TyHtbl.add htbl v1 [v2]
+    | Some rows -> TyHtbl.replace htbl v1 (v2 :: rows) in
   List.iter
     (fun (v1, v2) ->
       if TySet.mem v1 group then begin
@@ -711,7 +775,7 @@ let collect_variables_edges group =
     constraints;
   edges_ub, edges_lb
 
-(** printing *)
+(** Printing *)
 
 let sprint_group ty =
   variable_group ty |> Seq.map (fun ty -> ty.id) |> Seq.map Int.to_string |> List.of_seq |> String.concat ", "
@@ -722,10 +786,10 @@ let rec sprint_desc = function
   | Tvar (Some n) -> Printf.sprintf "Tvar %s" n
   | Tvar None -> "Tvar _"
   | Tunivar _ -> "Tunivar"
-  | Tconstr (p, tl, _) -> 
-      Printf.sprintf "Tconstr %s(%s)" 
-        (match Path.flatten p with 
-        | `Contains_apply -> "??" 
+  | Tconstr (p, tl, _) ->
+      Printf.sprintf "Tconstr %s(%s)"
+        (match Path.flatten p with
+        | `Contains_apply -> "??"
         | `Ok (i, l) -> Printf.sprintf "%s.%s" (String.concat "." l) (Ident.name i))
         (String.concat ", " (List.map sprint_ty tl))
   | Tfield _ -> "Tfield"
@@ -737,12 +801,25 @@ let rec sprint_desc = function
   | Tpoly _ -> "Tpoly"
   | Tsubst (ty, _oty) -> Printf.sprintf "Tsubst %s" (sprint_ty ty)
 
-and sprint_ty ty = 
+and sprint_ty ty =
   Printf.sprintf "[%d:%s:%s]" ty.id (sprint_desc ty.desc) (sprint_group ty)
+
+let sprint_constraint_relation v = match v with
+  | Left -> "Left"
+  | Right -> "Right"
+  | Equal -> "Equal"
+  | Unknown -> "Unknown"
+
+let sprint_tags tags = String.concat "" ["[";String.concat "," tags;"]"]
+
+let sprint_row row =
+  let (from, id) = row.debug_info in
+  Printf.sprintf "Row %d from %s kind %s" id from
+    (sprint_tags @@ List.map fst (kind_get row.row_kind))
 
 (** Graph utils *)
 
-(** is variables are strongly connected in constraints graph 
+(** is variables are strongly connected in constraints graph
     (consequently they are equal) *)
 let is_sc_variables (edges, _) v1 v2 =
   let rec check_path visited final current =
@@ -781,12 +858,6 @@ let repr_link1 t = function
      repr_link t d' t'
  | t' -> t'
 
-let repr_link1 t t' = 
-  let t = repr_link1 t t' in
-  match t.desc with
-  | Tlink _ -> assert false
-  | _ -> t
-
 let repr t =
   match t.desc with
    Tlink t' ->
@@ -809,34 +880,25 @@ let rec _set_scope ty sc =
     variable_group ty |> Seq.iter (fun ty -> ty.scope <- sc)
 
 let set_scope ty sc =
-  if is_constrained ty 
+  if is_constrained ty
   then _set_scope ty sc
   else ty.scope <- sc
 
-let rec _set_level ty lv = 
+let rec _set_level ty lv =
   if ty.level <> lv then
     variable_group ty |> Seq.iter (fun ty -> ty.level <- lv)
 
 let set_level ty lv =
-  if is_constrained ty 
+  if is_constrained ty
   then _set_level ty lv
   else ty.level <- lv
 
-let rec merge_group ty =
-  let ty = repr ty in
-  variable_group ty |>
-  Seq.iter (fun ty' -> if ty' <> ty then ty'.desc <- Tlink ty)
-
 let rec set_desc ty d =
   Printf.fprintf dump "set_desc: %s <- %s\n" (sprint_ty ty) (sprint_desc d);
-  
-  let is_tsubst_desc d =
-    match d with
-    | Tsubst _ -> true
-    | _ -> false
-  in
+
+  let is_tsubst_desc = function Tsubst _ -> true | _ -> false in
   let is_tsubst ty = is_tsubst_desc ty.desc in
-  
+
   let set () = ty.desc <- d in
 
   if is_tsubst_desc d || is_tsubst ty then set () else begin
@@ -882,87 +944,21 @@ end
 
 (* Comparison for [type_expr]; cannot be used for functors *)
 
-let eq_type t1 t2 = 
-  (* let () = Printf.printf "eq_type: %s - %s\n" (sprint_ty t1) (sprint_ty t2) in *)
+let eq_type t1 t2 =
   t1 == t2 ||
   let t1 = repr t1 and t2 = repr t2 in
-  (* let () = Printf.printf "eq_type: %s - %s\n" (sprint_ty t1) (sprint_ty t2) in *)
-  t1 == t2 || 
+  t1 == t2 ||
   is_constrained t1 && is_constrained t2 &&
   let group = get_variable_group t1 in
   TySet.mem t2 group &&
-  (* let () = Printf.printf "eq_type: in group\n" in *)
   let edges = collect_variables_edges group in
-  let ans = is_sc_variables edges t1 t2 in
-  (* let () = Printf.printf "eq_type: %b\n" ans in *)
-  ans
+  is_sc_variables edges t1 t2
 
 let compare_type t1 t2 = compare (get_id t1) (get_id t2)
 
-(* tail list interface *)
-
-let tl_init l = TLCons (l, ref TLNil)
-
-let tl_flatten tl = 
-  let rec collect tl = 
-    match tl with
-    | TLCons (l, ls) -> l :: collect !ls
-    | TLNil -> []
-  in
-  List.flatten @@ List.rev @@ collect tl
-
-let tl_merge_append tl1 l1 tl2 l2 =
-  let rec last_ref tl =
-    match tl with
-    | TLCons (_, tlr') -> begin
-        match !tlr' with
-        | TLCons _ as tlr -> last_ref tlr
-        | TLNil -> tlr'
-      end
-    | TLNil -> assert false
-  in
-  let lr1 = last_ref tl1 in
-  let lr2 = last_ref tl2 in
-  let ref_nil = ref TLNil in
-  lr1 := TLCons (l1, ref_nil);
-  lr2 := TLCons (l2, ref_nil)
-
-(* kind interface *)
-
-let kind_get k = tl_flatten @@ dsf_get k
-
 (* Constructor and accessors for [row_desc] *)
 
-type set_solution =
-  | SSUnion of set_solution * set_solution
-  | SSIntersection of set_solution * set_solution
-  | SSVariable of row_desc
-  | SSTags of
-      string list option * (* lb *)
-      string list option   (* ub *)
-  | SSFail of
-      string list option * (* lb *)
-      string list option   (* ub *)
-
-type set_bound_solution = {
-  tags: string list option;
-  variables: row_desc list;
-}
-
-let sprint_constraint_relation v = match v with
-  | Left -> "Left"
-  | Right -> "Right"
-  | Equal -> "Equal"
-  | Unknown -> "Unknown"
-
-let sprint_tags tags = String.concat "" ["[";String.concat "," tags;"]"]
-let sprint_row_id {debug_info=(_, id)} = Printf.sprintf "%d" id
-let sprint_row_ids rows = String.concat "," @@ List.map sprint_row_id rows
-
-let sprint_row row =
-  let (from, id) = row.debug_info in
-  Printf.sprintf "Row %d from %s kind %s" id from
-    (sprint_tags @@ List.map fst (kind_get row.row_kind))
+(* Logged constraints addition *)
 
 let log_new_polyvariant_constraint from relation row1 row2 =
   Printf.fprintf dump "From: %s; Variance: %s\n" from (sprint_constraint_relation relation);
@@ -972,6 +968,7 @@ let log_new_polyvariant_constraint from relation row1 row2 =
 let add_polyvariant_constraint ?(from="Unknown source") relation row1 row2 =
   log_new_polyvariant_constraint from relation row1 row2;
   add_polyvariants_constraints relation row1 row2;
+  (* To keep the levels and scope equal *)
   add_variables_constraint relation row1.row_var row2.row_var
 
 let log_new_polyvariant_tags_constraint relation row1 tags =
@@ -1002,32 +999,8 @@ let add_constraint ?(from="Unknown source") relation ty1 ty2 =
   log_new_constraint from relation ty1 ty2;
   add_variables_constraint relation ty1 ty2
 
-let get_imediate_subtypes row =
-  List.map fst @@ List.filter (fun (_, r) -> r == row) !polyvariants_constraints
-
-let get_imediate_uptypes row =
-  List.map snd @@ List.filter (fun (r, _) -> r == row) !polyvariants_constraints
-
-type row_kind_list = (label * type_expr option) list
-type row_kind_id = row_kind dsf ref
-type row_kind_class = row_kind dsf
-
-let sprint_htbl pref htbl kp pv =
-  Printf.fprintf dump "Htbl %s:\n" pref;
-  RowDescHtbl.iter (fun k v -> Printf.fprintf dump "%s: %s\n" (kp k) (pv v)) htbl;
-  Printf.fprintf dump "\n";
-  flush stdout
-
-(** edges = ((edges_var_ub, edges_tag_ub), (edges_var_lb, edges_tag_lb)) *)
-
-let collect_edges group =
-  let (edges_var_ub, edges_var_lb) = collect_polyvariants_edges group in
-  let edges_tag_ub = collect_tag_ub_edges group in
-  let edges_tag_lb = collect_tag_lb_edges group in
-  ((edges_var_ub, edges_tag_ub), (edges_var_lb, edges_tag_lb))
-
-(* romanv: Maybe we can merge this components in single type for performance *)
-(* romanv: Should be rewrited in a linear complexity *)
+(* set-theoretic: todo: Maybe we can merge this components in single type for performance *)
+(* set-theoretic: todo: Should be rewrited in a linear complexity *)
 (* classes of equivalence (strongly connected components in constraints graph) *)
 let find_classes ((edges, _), _) =
   let reachable = RowDescHtbl.create 17 in
@@ -1040,7 +1013,7 @@ let find_classes ((edges, _), _) =
     end
   in
   RowDescHtbl.iter
-    (fun id _ ->      
+    (fun id _ ->
       RowDescHtbl.add reachable id (calc_reachable (RowDescSet.empty) id))
     edges;
   let connected = RowDescHtbl.create 17 in
@@ -1057,19 +1030,19 @@ let find_classes ((edges, _), _) =
   reachable;
   connected
 
-(** transform edges to remove cycles *)
+(** Transform edges to remove cycles *)
 
 let select_representatives classes =
   let get_repr = RowDescHtbl.create 17 in
-  let to_remove = 
-    RowDescHtbl.fold 
+  let to_remove =
+    RowDescHtbl.fold
       (fun row connected to_remove ->
         if RowDescSet.mem row to_remove then to_remove else begin
           List.iter (fun row' -> RowDescHtbl.add get_repr row' row) connected;
           RowDescSet.union to_remove (RowDescSet.of_list connected)
         end
-        ) 
-      classes RowDescSet.empty 
+        )
+      classes RowDescSet.empty
   in
   get_repr, to_remove
 
@@ -1114,19 +1087,21 @@ let remove_cycles ((edges_ub_vars, edges_ub_tags), (edges_lb_vars, edges_lb_tags
 
 (* transform context according to the classes and selected representatives *)
 let transform_context get_repr context =
-  let back_map = 
-    List.to_seq context |>  
+  let back_map =
+    List.to_seq context |>
     Seq.map (fun row -> (row, RowDescHtbl.find_opt get_repr row)) |>
     Seq.filter_map (fun (row, repr) -> Option.map (fun repr -> (repr, row)) repr) |>
     RowDescHtbl.of_seq
   in
-  let new_context = 
-    uniq @@ 
-    List.map 
-      (fun row -> 
-        Option.value (RowDescHtbl.find_opt get_repr row) ~default:row) 
+  let new_context =
+    uniq @@
+    List.map
+      (fun row ->
+        Option.value (RowDescHtbl.find_opt get_repr row) ~default:row)
       context in
   new_context, back_map
+
+(* Set-theoretic types solution *)
 
 let solve_for_with_context_ solve_rec merge (edges_var, edges_tag) row =
   let vars_solution =
@@ -1183,10 +1158,10 @@ let solve_set_type_with_context_ context (edges_ub, edges_lb) (row : row_desc) =
 
   match ub_tags, lb_tags with
   | Some ub_tags, Some lb_tags when not @@ subset_lists lb_tags ub_tags ->
-      Printf.fprintf dump 
-        "FAIL on %s: %s; %s\n" 
-        (sprint_row row) 
-        (sprint_tags ub_tags) 
+      Printf.fprintf dump
+        "FAIL on %s: %s; %s\n"
+        (sprint_row row)
+        (sprint_tags ub_tags)
         (sprint_tags lb_tags);
       flush dump;
       SSFail (Some lb_tags, Some ub_tags)
@@ -1205,16 +1180,16 @@ let solve_set_type_with_context_ context (edges_ub, edges_lb) (row : row_desc) =
       solution
   end
 
-(* post-process context (return from representatives to original variables) *)
-let rec pp_context_in_ans context_back_map ans = 
-  let remap row = 
+(* post-process solution context (return from representatives to original variables) *)
+let rec pp_solution context_back_map solution =
+  let remap row =
     match RowDescHtbl.find_opt context_back_map row with
     | None -> row
     | Some row -> row
   in
-  let re = pp_context_in_ans context_back_map in
-  match ans with
-  | (SSFail _ | SSTags _) -> ans
+  let re = pp_solution context_back_map in
+  match solution with
+  | (SSFail _ | SSTags _) -> solution
   | SSIntersection (l, r) -> SSIntersection (re l, re r)
   | SSUnion (l, r) -> SSUnion (re l, re r)
   | SSVariable row -> SSVariable (remap row)
@@ -1226,10 +1201,10 @@ let solve_set_type_with_context context row =
   let get_repr = remove_cycles edges classes in
   let context, context_back_map = transform_context get_repr context in
   let ans = solve_set_type_with_context_ context edges row in
-  let ans = pp_context_in_ans context_back_map ans in
+  let ans = pp_solution context_back_map ans in
   ans
 
-(* romanv: Could be solved much faster in case of empty context *)
+(* set-theoretic: todo: Could be solved much faster in case of empty context *)
 let solve_set_type row =
   match solve_set_type_with_context [] row with
   | SSTags (lb, ub) ->
@@ -1252,14 +1227,14 @@ let ub_edges_closure (edges, _) =
     end
   in
   TyHtbl.iter
-    (fun id _ ->      
+    (fun id _ ->
       TyHtbl.add reachable id (calc_reachable (TySet.empty) id))
     edges;
   reachable
 
 let solve_vars vars =
-  let group = 
-    List.to_seq vars |> 
+  let group =
+    List.to_seq vars |>
     Seq.map get_variable_group |>
     Seq.fold_left TySet.union TySet.empty in
   let edges = collect_variables_edges group in
@@ -1328,16 +1303,16 @@ let cp_vars (vars : (type_expr * type_expr) list) : unit =
 
   List.iter (fun (ty, desc) -> Transient_expr.set_desc ty desc) redirect_descs
 
-let cp_vars vars = 
-  if List.length vars < 2 then () else cp_vars vars
+let cp_vars vars =
+  if List.length vars = 0 then () else cp_vars vars
 
 let cur_id = ref 0
 let new_id () = cur_id := !cur_id + 1; !cur_id
 
 let create_row ~from ~var ~kind ~fixed ~name : row_desc =
   let debug_info = (from, new_id ()) in
-  { row_kind=dsf_init (tl_init kind); row_fixed=fixed;
-    row_name=name; row_var=var; debug_info }
+  let row_kind = dsu_init (tl_init kind) in
+  { row_kind; row_fixed=fixed; row_name=name; row_var=var; debug_info }
 
 (* [row_fields] subsumes the original [row_repr] *)
 let row_fields_ub row =
@@ -1348,9 +1323,9 @@ let row_fields_ub row =
         match oty with
         | Some ty -> ty
         | None ->
-          Printf.fprintf dump 
-            "ub: tag %s not found in row %s\n" tag (sprint_row row); 
-          flush dump; 
+          Printf.fprintf dump
+            "ub: tag %s not found in row %s\n" tag (sprint_row row);
+          flush dump;
           assert false
       ) tags)
   | Some (_, None) -> None
@@ -1358,20 +1333,20 @@ let row_fields_ub row =
 
 let row_fields_lb row =
   match solve_set_type row with
-  | Some (Some tags, _) -> List.map (fun tag -> tag, 
+  | Some (Some tags, _) -> List.map (fun tag -> tag,
       let oty = List.assoc_opt tag (kind_get row.row_kind) in
       match oty with
       | Some ty -> ty
       | None ->
-        Printf.fprintf dump 
-          "lb: tag %s not found in row %s\n" tag (sprint_row row); 
-        flush dump; 
+        Printf.fprintf dump
+          "lb: tag %s not found in row %s\n" tag (sprint_row row);
+        flush dump;
         assert false) tags
   | Some (None, _) | None -> []
 
-let row_kind_orig row = dsf_get row.row_kind
+let row_kind_orig row = dsu_get row.row_kind
 let row_kind row = tl_flatten @@ row_kind_orig row
-let row_kind_id row = let (_, id) = dsf_last_link row.row_kind in id
+let row_kind_id row = let (_, id) = dsu_last_link row.row_kind in id
 let row_kind_class row = row.row_kind
 let row_fixed row = row.row_fixed
 let row_name row = row.row_name
@@ -1388,10 +1363,10 @@ let get_row_field tag row =
   List.assoc_opt tag (kind_get row.row_kind)
 
 let merge_row_kinds f row row' =
-  dsf_merge f row.row_kind row'.row_kind
+  dsu_merge f row.row_kind row'.row_kind
 
 let merge_row_kinds_classes f kind_class kind_class' =
-  dsf_merge f kind_class kind_class'
+  dsu_merge f kind_class kind_class'
 
 let set_row_name row row_name =
   { row with row_name }
@@ -1438,13 +1413,6 @@ let undo_change = function
 type snapshot = changes ref * int
 let last_snapshot = Local_store.s_ref 0
 
-let dump_link ty ty' =
-  if Sys.file_exists "/dump_link" then
-  Printf.fprintf dump 
-    "link_type: %s - %s\n" 
-    (sprint_ty ty) 
-    (sprint_ty ty')
-
 let log_type ty =
   if ty.id <= !last_snapshot then log_change (Ctype (ty, ty.desc))
 let link_type ty ty' =
@@ -1452,7 +1420,6 @@ let link_type ty ty' =
   let ty' = repr ty' in
   if ty == ty' then () else begin
   log_type ty;
-  dump_link ty ty';
   let desc = ty.desc in
   Transient_expr.set_desc ty (Tlink ty');
   (* Name is a user-supplied name for this unification variable (obtained
@@ -1470,7 +1437,8 @@ let link_type ty ty' =
   | _ -> ()
   end
   (* ; assert (check_memorized_abbrevs ()) *)
-  (*  ; check_expans [] ty' *)(* TODO: consider eliminating set_type_desc, replacing it with link types *)
+  (*  ; check_expans [] ty' *)
+(* TODO: consider eliminating set_type_desc, replacing it with link types *)
 let set_type_desc ty td =
   let ty = repr ty in
   if td != ty.desc then begin

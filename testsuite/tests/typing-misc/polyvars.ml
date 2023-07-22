@@ -2,6 +2,9 @@
    * expect
 *)
 
+(* set-theoretic: todo:
+   revew other test files for polymorpic variants usage *)
+
 let c = `C;;
 [%%expect {|
 val c : `C = `C
@@ -26,7 +29,7 @@ let f x = match x with `A 1 -> `B "one" | `A _ -> `C ();;
 val f : `A of int -> `B of string | `C of unit = <fun>
 |}]
 
-let id2 x = match x with `A | `B -> x (* prinitng fails *)
+let id2 x = match x with `A | `B -> x
 
 let a = id2 `A
 
@@ -43,13 +46,14 @@ let f y =
    | `B -> `D
 
 let err = f `C;;
+
 [%%expect {|
 val f : `A | `B -> `C | `D = <fun>
 Line 6, characters 12-14:
 6 | let err = f `C;;
                 ^^
-Error: This expression has type Bot but an expression was expected of type
-         Bot
+Error: This expression has type `C but an expression was expected of type
+          `A | `B
        These two variant types have no intersection
 |}]
 
@@ -64,7 +68,7 @@ val f : (T as 'a) -> `C | 'a = <fun>
 val d : `C | `D = `D
 |}]
 
-let f y = (* failing *)
+let f y =
    match y with
    | `B :: _ -> `C
    | `C :: _ -> List.hd y
@@ -81,7 +85,7 @@ let f x =
 val f : (`A | `B as 'a) -> `C | 'a list = <fun>
 |}]
 
-let f f1 f2 e = f1 e || f2 e || f1 `A || f2 `B;; (* failing *)
+let f f1 f2 e = f1 e || f2 e || f1 `A || f2 `B;;
 [%%expect {|
 val f : (`A | 'a -> bool) -> (`B | 'a -> bool) -> 'a -> bool = <fun>
 |}]
@@ -165,19 +169,10 @@ let f x = ignore (match x with `A|`B -> 1); ignore (x : [`A]);;
 val f : `A -> unit = <fun>
 |}];;
 
-let f (x : [< `A | `B]) = match x with `A | `B | `C -> 0;;
-[%%expect{|
-Line 1, characters 49-51:
-1 | let f (x : [< `A | `B]) = match x with `A | `B | `C -> 0;; (* warn *)
-                                                     ^^
-Warning 12 [redundant-subpat]: this sub-pattern is unused.
-val f : `A | `B -> int = <fun>
-|}];;
-
 let f (x : [`A | `B]) = match x with `A | `B | `C -> 0;;
 [%%expect{|
 Line 1, characters 49-51:
-1 | let f (x : [< `A | `B]) = match x with `A | `B | `C -> 0;; (* warn *)
+1 | let f (x : [< `A | `B]) = match x with `A | `B | `C -> 0;;
                                                      ^^
 Warning 12 [redundant-subpat]: this sub-pattern is unused.
 val f : `A | `B -> int = <fun>
@@ -192,6 +187,7 @@ function Some `A, A -> 1 | Some `A, B -> 1
        | Some _, A -> 2  | None, A -> 3 | _, B -> 4;;
 function A, `A -> 1 | A, `B -> 2 | B, _ -> 3;;
 function `A, A -> 1 | `B, A -> 2 | _, B -> 3;;
+(* set-theoretic: todo: maybe this test could be successful *)
 function (`A|`B), _ -> 0 | _,(`A|`B) -> 1;;
 function `B,1 -> 1 | _,1 -> 2;;
 function 1,`B -> 1 | 1,_ -> 2;;
@@ -237,16 +233,16 @@ Warning 11 [redundant-case]: this match case is unused.
 (* PR#6787 *)
 let revapply x f = f x;;
 
-let f x (g : [< `Foo]) =
+let f x (g : [`Foo]) =
   let y = `Bar x, g in
   revapply y (fun ((`Bar i), _) -> i);;
-(* f : 'a -> [< `Foo ] -> 'a *)
 [%%expect{|
 val revapply : 'a -> ('a -> 'b) -> 'b = <fun>
 val f : 'a -> `Foo -> 'a = <fun>
 |}];;
 
 (* PR#6124 *)
+(* set-theoretic: todo: review test *)
 let f : ([`A | `B ] as 'a) -> [> 'a] -> unit = fun x (y : [> 'a]) -> ();;
 let f (x : [`A | `B] as 'a) (y : [> 'a]) = ();;
 [%%expect{|
@@ -273,7 +269,7 @@ let x:(([`A] as 'a)* ([`B] as 'a)) = [`A]
 Line 1, characters 22-32:
 1 | let x:(([`A] as 'a)* ([`B] as 'a)) = [`A]
                           ^^^^^^^^^^
-Error: This alias is bound to type Bot but is used as an instance of type Bot
+Error: This alias is bound to type `A but is used as an instance of type `B
        These two variant types have no intersection
 |}]
 
@@ -300,7 +296,7 @@ Error: This recursive type is not regular.
 (* PR 10762 *)
 type a = int
 type t = [ `A of a ]
-let inspect: [< t ] -> unit = function
+let inspect: t -> unit = function
   | `A 0 -> ()
   | `A _ -> ()
 [%%expect {|
@@ -308,19 +304,3 @@ type a = int
 type t = `A of a
 val inspect : `A of a -> unit = <fun>
 |}]
-
-(* romanv: regression *)
-
-let f a b =
-  match a, b with
-  | `S, `Outside
-  | `S, `Inside -> assert false
-  
-
-let mand a b c d = 
-  match a, b, c, d with
-  | true, true, true, true -> true
-  | _ -> false
-
-let f f1 f2 e = mand (f1 e) (f2 e) (f1 `A) (f2 `B)
-

@@ -642,13 +642,11 @@ let merge_constraint initial_env loc sg lid constr =
         return ~replace_by:(Some item) (path, lid, tcstr)
     | _ -> None
   and merge_signature env sg namelist =
-  try
     match
       Signature_group.replace_in_place (patch_item constr namelist env sg) sg
     with
     | Some (x,sg) -> x, sg
     | None -> raise(Error(loc, env, With_no_component lid.txt))
-  with e -> Printexc.print_backtrace stdout; raise e
   in
   try
     let names = Longident.flatten lid.txt in
@@ -1863,10 +1861,10 @@ let check_nongen_signature_item env sig_item =
   match sig_item with
     Sig_value(_id, vd, _) ->
       if Ctype.nongen_schema env vd.val_type then
-        assert false
+        raise (Error (vd.val_loc, env, Non_generalizable vd.val_type))
   | Sig_module (_id, _, md, _, _) ->
       if nongen_modtype env md.md_type then
-        assert false
+        raise(Error(md.md_loc, env, Non_generalizable_module md.md_type))
   | _ -> ()
 
 let check_nongen_signature env sg =
@@ -2861,7 +2859,7 @@ let type_module_type_of env smod =
   let mty = Mtype.scrape_for_type_of ~remove_aliases env tmty.mod_type in
   (* PR#5036: must not contain non-generalized type variables *)
   if nongen_modtype env mty then
-    assert false;
+    raise(Error(smod.pmod_loc, env, Non_generalizable_module mty));
   tmty, mty
 
 (* For Typecore *)

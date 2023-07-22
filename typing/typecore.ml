@@ -391,6 +391,7 @@ let unify_head_only ~refine loc env ty constr =
 
 (* Creating new conjunctive types is not allowed when typing patterns *)
 (* make all Reither present in open variants *)
+(* set-theoretic: todo: requires validation *)
 let finalize_variant _pat _tag _opat _r = ()
 
 let has_variants p =
@@ -764,7 +765,7 @@ let solve_Ppat_variant ~refine loc env tag no_arg expected_ty =
      the abstract row variable *)
   if tag <> Parmatch.some_private_tag then
     unify_pat_types ~refine loc env (newgenty(Tvariant row)) expected_ty;
-  (arg_type, make_row (newvar ()), expected_ty)
+  (arg_type, make_row (newvar ()), instance expected_ty)
 
 (* Building the or-pattern corresponding to a polymorphic variant type *)
 let build_or_pat env loc lid =
@@ -791,9 +792,9 @@ let build_or_pat env loc lid =
   let name = Some (path, tyl) in
   let make_row var =
     create_row ~from:"build_or_pat" ~var ~kind ~fixed:None ~name in
-  let ty = newty (Tvariant (make_row (newvar ()))) in
+  let ty = newty (Tvariant (make_row (newvar()))) in
   let gloc = {loc with Location.loc_ghost=true} in
-  let row' = ref (make_row (newvar ())) in
+  let row' = ref (make_row (newvar())) in
   let pats =
     List.map
       (fun (l,p) ->
@@ -2605,6 +2606,7 @@ let self_coercion = ref ([] : (Path.t * Location.t list ref) list)
 
 (* Helpers for type_cases *)
 
+(* set-theoretic: todo: review and remove *)
 let contains_variant_either _ty = false
 
 let shallow_iter_ppat f p =
@@ -2657,24 +2659,8 @@ let may_contain_gadts p =
    | _ -> false)
   p
 
+(* set-theoretic: todo: requires verification *)
 let check_absent_variant _env _gp = ()
-  (* iter_general_pattern { f = fun (type k) (pat : k general_pattern) ->
-    match pat.pat_desc with
-    | Tpat_variant (s, arg, row) ->
-      let row = !row in
-      if List.exists (fun (s',_) -> s = s') (row_fields row)
-        || not (is_fixed row) && not (static_row row)  (* same as Ctype.poly *)
-      then () else
-      let ty_arg = Option.map (fun p -> correct_levels p.pat_type) arg in
-      let fields = [s, ty_arg] in
-      let set_data = mk_set_unknown "check_absent_variant" in
-      let row' =
-        create_row ~fields ~fixed:None ~name:None ~set_data
-      in
-      (* Should fail *)
-      unify_pat (ref env) {pat with pat_type = newty (Tvariant row')}
-                          (correct_levels pat.pat_type)
-    | _ -> () } *)
 
 (* Getting proper location of already typed expressions.
 
@@ -2805,7 +2791,6 @@ and type_expect_
   match sexp.pexp_desc with
   | Pexp_ident lid ->
       let path, desc = type_ident env ~recarg lid in
-      Printf.printf "Pexp_ident: %s %s\n" (Path.name path) (sprint_ty desc.val_type);
       let exp_desc =
         match desc.val_kind with
         | Val_ivar (_, cl_num) ->
@@ -3380,7 +3365,8 @@ and type_expect_
                   let snap = snapshot () in
                   let ty, _b = enlarge_type env ty' in
                   try
-                    force (); Ctype.unify ~relation:Right env arg.exp_type ty; true (* romanv: To validate variance *)
+                    (* set-theoretic: todo: verify relation *)
+                    force (); Ctype.unify ~relation:Right env arg.exp_type ty; true
                   with Unify _ ->
                     backtrack snap; false
                 then ()
@@ -4457,8 +4443,8 @@ and type_argument ?explanation ?recarg env sarg ty_expected' ty_expected =
       end
   | None ->
       let texp = type_expect ?recarg env sarg
-        (mk_expected ?explanation ty_expected') in (* 1 *)
-      unify_exp env texp ty_expected; (* 2 *)
+        (mk_expected ?explanation ty_expected') in
+      unify_exp env texp ty_expected;
       texp
 
 and type_application env funct sargs =
@@ -4485,8 +4471,6 @@ and type_application env funct sargs =
           then
             Location.prerr_warning sarg.pexp_loc
               Warnings.Ignored_extra_argument;
-          (* romanv: future *)
-          (* Printf.printf "lv tf: %d; lv t1: %d\n" (get_level ty_fun) (get_level t1); *)
           unify ~relation:Left env ty_fun (newty (Tarrow(lbl,t1,t2,commu_var ())));
           (t1, t2)
       | Tarrow (l,t1,t2,_) when l = lbl
@@ -4738,21 +4722,16 @@ and type_construct env loc lid sarg ty_expected_explained attrs =
 
 (* Typing of statements (expressions whose values are discarded) *)
 
-and type_statement ?explanation env (sexp : Parsetree.expression) =
+and type_statement ?explanation env sexp =
   begin_def();
   let exp = type_exp env sexp in
   end_def();
   let ty = expand_head env exp.exp_type and tv = newvar() in
   (* romanv: future *)
-  if is_Tvar ty && get_level ty > get_level tv then begin
-    Pprintast.expression Format.std_formatter sexp;
-    Format.pp_print_newline Format.std_formatter ();
-    Printf.printf "eet: %s lv: %d\n" (sprint_ty exp.exp_type) (get_level exp.exp_type);
-    Printf.printf "lv ty: %d; lv tv: %d\n" (get_level ty) (get_level tv);
+  if is_Tvar ty && get_level ty > get_level tv then
     Location.prerr_warning
       (final_subexpression exp).exp_loc
       Warnings.Nonreturning_statement;
-  end;
   if !Clflags.strict_sequence then
     let expected_ty = instance Predef.type_unit in
     with_explanation explanation (fun () ->
@@ -5354,12 +5333,6 @@ let type_binding env rec_flag spat_sexp_list =
       At_toplevel
       env rec_flag spat_sexp_list false
   in
-  List.iter2 
-    (fun spat pat -> 
-      Printf.printf "type: %s\n" (sprint_ty pat.vb_expr.exp_type);
-      Pprintast.binding Format.std_formatter spat;
-      Format.pp_print_newline Format.std_formatter ();) 
-    spat_sexp_list pat_exp_list;
   (pat_exp_list, new_env)
 
 let type_let existential_ctx env rec_flag spat_sexp_list =
@@ -5440,7 +5413,7 @@ let report_literal_type_constraint const = function
       end
   | None -> []
 
-let report_Expr_type_clash_hints exp diff =
+let report_expr_type_clash_hints exp diff =
   match exp with
   | Some (Texp_constant const) -> report_literal_type_constraint const diff
   | _ -> []
@@ -5529,7 +5502,7 @@ let report_error ~loc env = function
       ) ()
   | Expr_type_clash (err, explanation, exp) ->
       let diff = type_clash_of_trace err.trace in
-      let sub = report_Expr_type_clash_hints exp diff in
+      let sub = report_expr_type_clash_hints exp diff in
       report_unification_error ~loc ~sub env err
         ~type_expected_explanation:
           (report_type_expected_explanation_opt explanation)

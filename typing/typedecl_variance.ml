@@ -40,7 +40,7 @@ exception Error of Location.t * error
 let get_variance ty visited =
   try TypeMap.find ty !visited with Not_found -> Variance.null
 
-(** romanv: have to be fixed according to in-group relations *)
+(* set-theoretic: todo: check if constraints affect varance inference *)
 let set_variance ty vari visited =
   let tys = variable_group ty in
   Seq.fold_left (fun visited ty -> TypeMap.add ty vari visited) !visited tys

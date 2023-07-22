@@ -252,19 +252,12 @@ and transl_type_aux env policy styp =
                                         List.length stl)));
       let args = List.map (transl_type env policy) stl in
       let params = instance_list decl.type_params in
-      (* Printf.printf "Args\n";
-      List.iter (fun a -> Printtyp.raw_type_expr Format.std_formatter a.ctyp_type; Format.pp_print_newline Format.std_formatter ()) args;
-      Printf.printf "Params\n";
-      List.iter (fun p -> Printtyp.raw_type_expr Format.std_formatter p; Format.pp_print_newline Format.std_formatter ()) params;
-      Printf.printf "No inst params\n";
-      List.iter (fun p -> Printtyp.raw_type_expr Format.std_formatter p; Format.pp_print_newline Format.std_formatter ()) decl.type_params; *)
       let unify_param =
         match decl.type_manifest with
           None -> unify_var
         | Some ty ->
             if get_level ty = Btype.generic_level
-              then unify_var
-              else unify
+              then unify_var else unify
       in
       List.iter2
         (fun (sty, cty) ty' ->
@@ -333,9 +326,9 @@ and transl_type_aux env policy styp =
               ~from:"transl_type_aux"
               ~var:(newvar ())
               ~kind:[]
-              ~fixed:None 
+              ~fixed:None
               ~name:(Some (path, ty_args)) in
-          add_polyvariant_constraint Right row' row; (* romanv: maybe Equal*)
+          add_polyvariant_constraint Right row' row;
           newty (Tvariant row')
       | Tobject (fi, _) ->
           let _, tv = flatten_fields fi in
@@ -402,8 +395,7 @@ and transl_type_aux env policy styp =
           if l <> l' then raise(Error(styp.ptyp_loc, env, Variant_tags(l, l')));
           let ty = mkfield l oty and ty' = mkfield l oty' in
           if is_equal env false [ty] [ty'] then () else
-          try
-            unify ~relation:Equal env ty ty'
+          try unify ~relation:Equal env ty ty'
           with Unify _trace ->
             raise(Error(loc, env, Constructor_mismatch (ty,ty')))
         with Not_found ->
@@ -467,6 +459,7 @@ and transl_type_aux env policy styp =
         ~kind:fields
         ~fixed:None
         ~name in
+      (* set-theoretic: todo: review and adjust behaviour to new types *)
       if closed = Closed then
         add_polyvariant_tags_constrint Right row (List.map fst fields);
       let lb =
@@ -483,7 +476,6 @@ and transl_type_aux env policy styp =
       let new_univars = make_poly_univars vars in
       let old_univars = !univars in
       univars := new_univars @ !univars;
-      (* Printast.core_type 0 Format.std_formatter st; *)
       let cty = transl_type env policy st in
       let ty = cty.ctyp_type in
       univars := old_univars;
@@ -582,6 +574,7 @@ and transl_fields env policy o fields =
 
 
 (* Make the rows "fixed" in this type, to make universal check easier *)
+(* set-theoretic: todo: implement *)
 let make_fixed_univars _ty = ()
 
 let make_fixed_univars ty =

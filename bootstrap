@@ -1,7 +1,6 @@
 #!/bin/bash
-# romanv automation script
 
-./clean || exit
+# set-theoretic: bootstrap script (should be removed)
 
 git checkout 4.14 || exit
 git checkout HEAD -- boot || exit
@@ -18,5 +17,3 @@ make coreall || exit
 make bootstrap || exit
 make partialclean -j || exit
 make -j || exit
-
-./clean

@@ -60,9 +60,6 @@ type row_desc
 type field_kind
 type commutable
 
-(* romanv: should be splitted
-           or marked with polyvariants parameter
-           but it requires lots of work *)
 type type_desc =
   | Tvar of string option
   (** [Tvar (Some "a")] ==> ['a] or ['_a]
@@ -223,9 +220,6 @@ val get_level: type_expr -> int
 val get_scope: type_expr -> int
 val get_id: type_expr -> int
 
-val sprint_ty: type_expr -> string
-val sprint_desc: type_desc -> string
-
 (** Transient [type_expr].
     Should only be used immediately after [Transient_expr.repr] *)
 type transient_expr = private
@@ -329,8 +323,6 @@ type row_kind_class
 val cp_rows: (row_desc * row_desc) list -> unit
 val cp_vars: (type_expr * type_expr) list -> unit
 
-val sprint_row: row_desc -> string
-
 val add_polyvariant_constraint:
   ?from:string -> constraint_relation -> row_desc -> row_desc -> unit
 val add_polyvariant_tags_constrint:
@@ -338,11 +330,7 @@ val add_polyvariant_tags_constrint:
 val add_constraint:
   ?from:string -> constraint_relation -> type_expr -> type_expr -> unit
 
-val get_imediate_subtypes: row_desc -> row_desc list
-val get_imediate_uptypes: row_desc -> row_desc list
-
 val solve_set_type_with_context: row_desc list -> row_desc -> set_solution
-(* val solve_set_type: row_desc -> (label list option * label list option) option *)
 
 val create_row:
   from: string ->
@@ -360,7 +348,6 @@ val row_kind_class: row_desc -> row_kind_class
 val row_fixed: row_desc -> fixed_explanation option
 val row_name: row_desc -> (Path.t * type_expr list) option
 val row_closed: row_desc -> bool
-val row_debug_info: row_desc -> string * int
 val row_var: row_desc -> type_expr
 
 val set_row_name: row_desc -> (Path.t * type_expr list) option -> row_desc
@@ -381,6 +368,7 @@ type row_desc_repr =
 
 val row_repr: row_desc -> row_desc_repr
 
+(** Group of variables connected in the constraints graph *)
 val variable_group: type_expr -> type_expr Seq.t
 
 module Uid = Shape.Uid

@@ -146,8 +146,8 @@ let is_fixed row = match row_fixed row with
 
 let has_fixed_explanation row = fixed_explanation row <> None
 
-let static_row _row = (* romanv: To validate *)
-  true
+(* set-theoretic: todo: validate *)
+let static_row _row = true
 
 let hash_variant s =
   let accu = ref 0 in
@@ -420,12 +420,12 @@ let rec copy_type_desc ?(keep_names=false) f = function
 module For_copy : sig
   type copy_scope
 
-  val get_copied_kind: copy_scope -> row_kind_id -> row_kind_class option
-
   val redirect_desc: copy_scope -> type_expr -> type_desc -> unit
 
   val register_row_copy: copy_scope -> row_desc -> row_desc -> unit
-  val register_copied_kind: copy_scope -> row_kind_id -> row_kind_class -> unit
+
+  val register_row_kind_copy: copy_scope -> row_kind_id -> row_kind_class -> unit
+  val get_copied_kind: copy_scope -> row_kind_id -> row_kind_class option
 
   val register_var_copy: copy_scope -> type_expr -> type_expr -> unit
 
@@ -435,15 +435,12 @@ end = struct
     mutable saved_desc : (transient_expr * type_desc) list;
     (* Save association of generic nodes with their description. *)
     mutable copied_rows : (row_desc * row_desc) list;
-    (** Pairs of copied types of polymorphic variants. (from, to) *)
+    (* Pairs of copied types of polymorphic variants. (from, to) *)
     mutable copied_kinds : (row_kind_id * row_kind_class) list;
+    (* Pairs of copied kinds of polymorphic variants. (from, to) *)
     mutable copied_vars : (type_expr * type_expr) list;
+    (* Pairs of copied type variables. (from, to) *)
   }
-
-  let get_copied_kind copy_scope id = List.assq_opt id copy_scope.copied_kinds
-
-  let register_copied_kind copy_scope id kind =
-    copy_scope.copied_kinds <- (id, kind) :: copy_scope.copied_kinds
 
   let redirect_desc copy_scope ty desc =
     let ty = Transient_expr.repr ty in
@@ -452,6 +449,13 @@ end = struct
 
   let register_row_copy copy_scope from to_ =
     copy_scope.copied_rows <- (from, to_) :: copy_scope.copied_rows
+
+  let register_row_kind_copy copy_scope id kind =
+    copy_scope.copied_kinds <- (id, kind) :: copy_scope.copied_kinds
+
+  let get_copied_kind copy_scope id =
+    List.assq_opt id copy_scope.copied_kinds
+
 
   let register_var_copy copy_scope from to_ =
     copy_scope.copied_vars <- (from, to_) :: copy_scope.copied_vars
@@ -483,7 +487,7 @@ let copy_row scope f fixed var row =
     | None ->
         let kind = List.map (fun (l, oty) -> l, Option.map f oty) kind in
         let new_row = create_row ~from:"copy_row" ~var ~kind ~fixed ~name in
-        For_copy.register_copied_kind scope kind_id (row_kind_class new_row);
+        For_copy.register_row_kind_copy scope kind_id (row_kind_class new_row);
         new_row
     | Some k ->
         let new_row = create_row ~from:"copy_row" ~var ~kind:[] ~fixed ~name in
@@ -491,7 +495,8 @@ let copy_row scope f fixed var row =
         new_row
   in
   For_copy.register_row_copy scope row new_row;
-  if var == row_var row then begin 
+  (* set-theoretic: todo: Check if not redundand *)
+  if var == row_var row then begin
     add_polyvariant_constraint Equal row new_row;
     tl_merge_append (row_kind_orig row) [] (row_kind_orig new_row) []
   end;
